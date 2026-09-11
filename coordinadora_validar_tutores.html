@@ -232,6 +232,13 @@ async function cargarDatos() {
   }
 }
 
+function mapVinculo(v) {
+  if (v === 'Si' || v === 'No') return v;
+  if (v === 'Profesor con Vinculo laboral con la USC') return 'Si';
+  if (v === 'Profesor SIN Vinculo laboral con la USC') return 'No';
+  return '';
+}
+
 function poblarFormulario() {
   const r = radicacion;
   document.getElementById('infoNumero').textContent = '📋 ' + r.numero;
@@ -242,11 +249,11 @@ function poblarFormulario() {
   document.getElementById('t1Nombre').value   = r.tutor1Nombre    || '';
   document.getElementById('t1Email').value    = r.tutor1Email     || '';
   document.getElementById('t1Telefono').value = r.tutor1Telefono  || '';
-  document.getElementById('t1Relacion').value = (r.tutor1Relacion === 'Si' || r.tutor1Relacion === 'No') ? r.tutor1Relacion : 'No';
+  document.getElementById('t1Relacion').value = mapVinculo(r.tutor1Relacion) || 'No';
   document.getElementById('t2Nombre').value   = r.tutor2Nombre    || '';
   document.getElementById('t2Email').value    = r.tutor2Email     || '';
   document.getElementById('t2Telefono').value = r.tutor2Telefono  || '';
-  document.getElementById('t2Relacion').value = (r.tutor2Relacion === 'Si' || r.tutor2Relacion === 'No') ? r.tutor2Relacion : '';
+  document.getElementById('t2Relacion').value = r.tutor2Nombre ? (mapVinculo(r.tutor2Relacion) || 'No') : '';
   document.getElementById('observaciones').value = r.notas || '';
 
   document.getElementById('loadWrap').style.display  = 'none';
