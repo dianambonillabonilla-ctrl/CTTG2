@@ -7,7 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Outfit',sans-serif;background:#0a0f1a;color:#e2e8f0;min-height:100vh}
+  body{font-family:'Outfit',sans-serif;background:linear-gradient(160deg,#123a2e 0%,#16233a 55%,#101827 100%);background-attachment:fixed;color:#e2e8f0;min-height:100vh}
   header{background:linear-gradient(135deg,#064e3b,#059669 80%,#1a3a5c);border-bottom:1px solid rgba(255,255,255,.08);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;flex-wrap:wrap;gap:10px}
   .hdr-l{display:flex;align-items:center;gap:10px}
   .logo{width:40px;height:40px;background:linear-gradient(135deg,#059669,#10b981);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px}
@@ -153,6 +153,7 @@
     <div class="filters">
       <input id="searchActas" placeholder="🔍 Buscar por número, estudiante..." oninput="renderActas()">
       <select id="fEstActas" onchange="renderActas()">
+        <option value="__pendientes" selected>Pendientes (activas)</option>
         <option value="">Todos los estados</option>
         <option value="Pendiente revisión">Pendiente revisión</option>
         <option value="Aprobada">Aprobada</option>
@@ -499,15 +500,22 @@ function contarActas(emailEstudiante) {
   return actas.filter(a => String(a.emailEstudiante||'').toLowerCase() === emailEstudiante.toLowerCase()).length;
 }
 
+const ESTADOS_ACTAS_ACTIVOS = ['Pendiente revisión', 'Solicitud Fase 2'];
+
 function renderActas() {
   const q  = (document.getElementById('searchActas').value || '').toLowerCase();
   const fE = document.getElementById('fEstActas').value;
   const filtered = actas.filter(a => {
     const txt = [a.numero, a.emailEstudiante, a.nombreArchivo].join(' ').toLowerCase();
-    return (!q || txt.includes(q)) && (!fE || a.estado === fE);
+    // Por defecto ("__pendientes") solo se muestran las activas; las ya tramitadas
+    // (Aprobada/Rechazada) solo aparecen si se buscan por texto o se elige su estado.
+    const pasaEstado = fE === '__pendientes'
+      ? (q ? true : ESTADOS_ACTAS_ACTIVOS.includes(a.estado))
+      : (!fE || a.estado === fE);
+    return (!q || txt.includes(q)) && pasaEstado;
   });
   const tbody = document.getElementById('tbodyActas');
-  if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin actas que coincidan.</td></tr>'; return; }
+  if (!filtered.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">Sin actas pendientes por ahora 🎉 — usa el buscador o cambia el filtro para ver las tramitadas.</td></tr>'; return; }
 
   tbody.innerHTML = filtered.map(a => {
     const badgeActa = {
