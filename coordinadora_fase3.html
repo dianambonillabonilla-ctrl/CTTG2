@@ -272,11 +272,11 @@ function renderTablas() {
     tbA.innerHTML = sinFecha.map(r => `<tr>
       <td><div class="num-rad">${esc(r.numero)}</div></td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.emailEstudiante)}</td>
-      <td style="font-size:13px">${r.semestre}${r.alertaS12==='SÍ'?'<span class="alert-s12">⚠️ S12</span>':''}</td>
-      <td style="font-size:12px;color:${parseFloat(r.pctTurnitin)>=20?'#fca5a5':'#6ee7b7'}">${r.pctTurnitin||'—'}%</td>
+      <td style="font-size:13px">${esc(r.semestre)}${r.alertaS12==='SÍ'?'<span class="alert-s12">⚠️ S12</span>':''}</td>
+      <td style="font-size:12px;color:${parseFloat(r.pctTurnitin)>=20?'#fca5a5':'#6ee7b7'}">${esc(r.pctTurnitin||'—')}%</td>
       <td style="font-family:'DM Mono',monospace;font-size:11px;color:rgba(255,255,255,.4)">${fmtFecha(r.fechaCarga)}</td>
       <td style="font-size:12px;color:rgba(255,255,255,.5)">${esc(([r.jurado1Nombre,r.jurado2Nombre].filter(Boolean).join(', ')||'—'))}</td>
-      <td><button class="btn gr" onclick="abrirAsignar(${r.rowIndex},'${esc(r.numero)}',${JSON.stringify(r).replace(/'/g,"&#39;")})">📅 Asignar</button></td>
+      <td><button class="btn gr" onclick="abrirAsignarFila(${Number(r.rowIndex)})">📅 Asignar</button></td>
     </tr>`).join('');
   }
 
@@ -290,12 +290,23 @@ function renderTablas() {
       <td><div class="num-rad">${esc(r.numero)}</div></td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.emailEstudiante)}</td>
       <td style="font-family:'DM Mono',monospace;font-size:12px;color:#fcd34d">${fmtFecha(r.fechaSustentacion)}</td>
-      <td style="font-size:12px;color:rgba(255,255,255,.5)">${r.horaSustentacion||'—'}</td>
+      <td style="font-size:12px;color:rgba(255,255,255,.5)">${esc(r.horaSustentacion||'—')}</td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.jurado1Nombre||'—')}</td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.jurado2Nombre||'—')}</td>
-      <td><button class="btn bl" onclick="abrirResultado(${r.rowIndex},'${esc(r.numero)}')">🎓 Registrar</button></td>
+      <td><button class="btn bl" onclick="abrirResultadoFila(${Number(r.rowIndex)})">🎓 Registrar</button></td>
     </tr>`).join('');
   }
+}
+
+// Los botones pasan solo la fila; los datos se toman de `fase3` para que un título o
+// nombre con comillas/HTML no pueda inyectar código en el onclick.
+function abrirAsignarFila(rowIndex) {
+  const r = fase3.find(x => Number(x.rowIndex) === rowIndex);
+  if (r) abrirAsignar(rowIndex, r.numero, r);
+}
+function abrirResultadoFila(rowIndex) {
+  const r = fase3.find(x => Number(x.rowIndex) === rowIndex);
+  if (r) abrirResultado(rowIndex, r.numero);
 }
 
 function abrirAsignar(rowIndex, numero, r) {

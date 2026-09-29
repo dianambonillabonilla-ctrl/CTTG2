@@ -55,6 +55,8 @@
   .b-tutores{background:rgba(52,211,153,.2);color:#6ee7b7}
   .b-pend{background:rgba(245,158,11,.2);color:#fcd34d}
   .b-solicitud{background:rgba(59,130,246,.2);color:#93c5fd}
+  .b-cancelado{background:rgba(148,163,184,.2);color:#cbd5e1;text-decoration:line-through}
+  .dup-aviso{margin-top:4px;font-size:10px;font-weight:600;color:#fca5a5;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);border-radius:6px;padding:2px 6px;display:inline-block;white-space:nowrap}
   .act{display:flex;gap:4px;flex-wrap:wrap}
   .btn{padding:4px 10px;border-radius:7px;border:1px solid rgba(255,255,255,.1);background:transparent;color:rgba(255,255,255,.5);font-size:12px;cursor:pointer;font-family:'Outfit',sans-serif;transition:all .15s;white-space:nowrap}
   .btn:hover{background:rgba(255,255,255,.07);color:#fff}
@@ -112,6 +114,7 @@
     <div class="mc c5"><div class="ml">Pend. Comité</div><div class="mv" id="mPend">—</div></div>
     <div class="mc c2"><div class="ml">Aprobadas</div><div class="mv" id="mApro">—</div></div>
     <div class="mc c4"><div class="ml">Devueltas</div><div class="mv" id="mDev">—</div></div>
+    <div class="mc c4"><div class="ml">⚠️ Posibles duplicadas</div><div class="mv" id="mDup">—</div></div>
   </div>
 
   <div class="main-tabs">
@@ -128,9 +131,12 @@
         <option value="Radicado">Radicado</option>
         <option value="Revisión">En Revisión</option>
         <option value="Tutores Avalados">Tutores Avalados</option>
+        <option value="Fase 2 Desbloqueada">Fase 2 Desbloqueada</option>
         <option value="Pendiente Comité Técnico">Pendiente Comité</option>
         <option value="Aprobado">Aprobado</option>
         <option value="Devuelto">Devuelto</option>
+        <option value="Cancelado">Cancelado</option>
+        <option value="__duplicadas">⚠️ Posibles duplicadas</option>
       </select>
       <select id="fMod" onchange="renderTabla()"><option value="">Todas las modalidades</option></select>
       <button class="btn" onclick="cargar()">↻ Actualizar</button>
@@ -188,9 +194,13 @@
       <select id="mEstado">
         <option value="Radicado">Radicado</option>
         <option value="Revisión">En Revisión</option>
-        <option value="Pendiente Comité">Pendiente Comité</option>
+        <option value="Tutores Avalados">Tutores Avalados</option>
+        <option value="Fase 2 Desbloqueada">Fase 2 Desbloqueada</option>
+        <option value="Pendiente Comité Técnico">Pendiente Comité Técnico</option>
         <option value="Aprobado">Aprobado ✅</option>
         <option value="Devuelto">Devuelto ↩</option>
+        <option value="Sustentado">Sustentado</option>
+        <option value="Cancelado">Cancelado ✕ (duplicada / retirada)</option>
       </select>
     </div>
     <div class="mfg">
@@ -322,11 +332,12 @@ async function cargar() {
     if (d.success) {
       radicaciones = (d.radicaciones || []).map(r => ({
         ...r,
-        estado: r.estado || "Radicado",
+        estado: normalizarEstado(r.estado),
         notas:  r.notas  || "",
         fechaRadicacion: parsearFecha(r.fechaRadicacion),
         fechaAprobacion: parsearFecha(r.fechaAprobacion)
       }));
+      marcarDuplicadas();
       actualizarMetricas();
       poblarFiltroMod();
       renderTabla();
@@ -335,16 +346,67 @@ async function cargar() {
   } catch(e) { setSyncState('error'); toast('Error al cargar: ' + e.message, 'err'); }
 }
 
+// Estados que cierran una radicación: no cuentan como "activa" ni como duplicado.
+const ESTADOS_CERRADOS = ['Cancelado','Devuelto','Reprobado','Sustentado','Completado'];
+
+// Quita espacios sobrantes y unifica variantes que la hoja guarda de formas distintas.
+function normalizarEstado(est) {
+  const e = String(est || '').replace(/\s+/g, ' ').trim();
+  if (!e) return 'Radicado';
+  const equivalentes = { 'tutores avalados':'Tutores Avalados', 'pendiente comité':'Pendiente Comité Técnico', 'revision':'Revisión', 'cancelada':'Cancelado' };
+  return equivalentes[e.toLowerCase()] || e;
+}
+
+function esActiva(r) { return !ESTADOS_CERRADOS.includes(r.estado); }
+
+function correosDe(r) {
+  return [r.emailEstudiante, r.email1, r.email2, r.email3]
+    .map(e => String(e || '').trim().toLowerCase()).filter(e => e.includes('@'));
+}
+function cedulasDe(r) {
+  return [r.cedula1, r.cedula2, r.cedula3]
+    .map(c => String(c || '').replace(/\.0+$/, '').replace(/\D/g, '')).filter(c => c.length >= 5);
+}
+
+// Marca en cada radicación activa las otras radicaciones activas del mismo grupo
+// (2 o más estudiantes en común por cédula o correo) o del mismo número.
+function marcarDuplicadas() {
+  radicaciones.forEach(r => { r.duplicadaCon = []; });
+  const activas = radicaciones.filter(esActiva);
+  for (let i = 0; i < activas.length; i++) {
+    for (let j = i + 1; j < activas.length; j++) {
+      const a = activas[i], b = activas[j];
+      const mismoNumero = a.numero && a.numero === b.numero;
+      const cedComunes  = cedulasDe(a).filter(c => cedulasDe(b).includes(c)).length;
+      const mailComunes = [...new Set(correosDe(a))].filter(c => correosDe(b).includes(c)).length;
+      if (mismoNumero || Math.max(cedComunes, mailComunes) >= 2) {
+        a.duplicadaCon.push(b.numero);
+        b.duplicadaCon.push(a.numero);
+      }
+    }
+  }
+}
+
+// Radicaciones del correo, primero las activas (la más reciente primero).
+function radicacionesDeCorreo(email) {
+  const e = String(email || '').trim().toLowerCase();
+  return radicaciones
+    .filter(r => correosDe(r).includes(e))
+    .sort((a, b) => (esActiva(b) - esActiva(a)) || String(b.fechaRadicacion).localeCompare(String(a.fechaRadicacion)));
+}
+
 function actualizarMetricas() {
-  const s = { total: radicaciones.length, radicado:0, revision:0, pendienteComite:0, aprobado:0, devuelto:0 };
+  const s = { total: radicaciones.length, radicado:0, revision:0, pendienteComite:0, aprobado:0, devuelto:0, duplicadas:0 };
   radicaciones.forEach(r => {
-    const est = r.estado || 'Radicado';
+    const est = r.estado;
     if (est === 'Radicado') s.radicado++;
     else if (est === 'Revisión') s.revision++;
-    else if (['Pendiente Comité','Pendiente Comité Técnico'].includes(est)) s.pendienteComite++;
+    else if (est === 'Pendiente Comité Técnico') s.pendienteComite++;
     else if (est === 'Aprobado') s.aprobado++;
     else if (est === 'Devuelto') s.devuelto++;
+    if (r.duplicadaCon.length) s.duplicadas++;
   });
+  document.getElementById('mDup').textContent  = s.duplicadas;
   document.getElementById('mTot').textContent  = s.total;
   document.getElementById('mRad').textContent  = s.radicado;
   document.getElementById('mRev').textContent  = s.revision;
@@ -360,8 +422,14 @@ function poblarFiltroMod() {
 }
 
 function badgeEst(est) {
-  const map = { 'Radicado':'b-radicado','Tutores avalados':'b-tutores','Tutores Avalados':'b-tutores','Fase 2 Desbloqueada':'b-comite','Pendiente Comité Técnico':'b-comite','Aprobado':'b-aprobado','Devuelto':'b-devuelto','Sustentado':'b-aprobado','Reprobado':'b-devuelto' };
-  return `<span class="badge ${map[est]||'b-radicado'}">${est||'Radicado'}</span>`;
+  const map = { 'Radicado':'b-radicado','Revisión':'b-revision','Tutores Avalados':'b-tutores','Fase 2 Desbloqueada':'b-comite','Pendiente Comité Técnico':'b-comite','Aprobado':'b-aprobado','Devuelto':'b-devuelto','Sustentado':'b-aprobado','Completado':'b-aprobado','Reprobado':'b-devuelto','Cancelado':'b-cancelado' };
+  return `<span class="badge ${map[est]||'b-radicado'}">${esc(est||'Radicado')}</span>`;
+}
+
+function avisoDuplicada(r) {
+  if (!r.duplicadaCon || !r.duplicadaCon.length) return '';
+  const otras = [...new Set(r.duplicadaCon)].join(', ');
+  return `<div class="dup-aviso" title="El mismo grupo tiene otra radicación activa. Confirme cuál sigue vigente y cambie la otra a Cancelado.">⚠️ Duplicada con ${esc(otras)}</div>`;
 }
 
 function renderTabla() {
@@ -370,7 +438,8 @@ function renderTabla() {
   const fM = document.getElementById('fMod').value;
   const filtered = radicaciones.filter(r => {
     const txt = [r.numero,r.nombre1,r.nombre2,r.nombre3,r.titulo,r.emailEstudiante,r.tutor1Nombre].join(' ').toLowerCase();
-    return (!q || txt.includes(q)) && (!fE || r.estado === fE) && (!fM || r.modalidad === fM);
+    const pasaEstado = !fE || (fE === '__duplicadas' ? r.duplicadaCon.length > 0 : r.estado === fE);
+    return (!q || txt.includes(q)) && pasaEstado && (!fM || r.modalidad === fM);
   });
   const body = document.getElementById('tbody');
   if (!filtered.length) { body.innerHTML = '<tr><td colspan="8" class="empty">Sin radicaciones que coincidan.</td></tr>'; return; }
@@ -379,7 +448,7 @@ function renderTabla() {
     const tutores = [r.tutor1Nombre,r.tutor2Nombre].filter(Boolean).join('<br>') || '—';
     const estado  = r.estado || 'Radicado';
     return `<tr>
-      <td><div class="num-rad">${esc(r.numero||'')}</div></td>
+      <td><div class="num-rad">${esc(r.numero||'')}</div>${avisoDuplicada(r)}</td>
       <td style="font-size:12px;max-width:160px">${nombres}</td>
       <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(r.titulo||'')}">${esc(r.titulo||'Sin título')}</td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.modalidad||'—')}</td>
@@ -398,7 +467,11 @@ function renderTabla() {
 function abrirModalEst(ri, numero, estadoActual) {
   document.getElementById('mRowIndex').value = ri;
   document.getElementById('mEstLabel').textContent = 'Radicación: ' + numero;
-  document.getElementById('mEstado').value = estadoActual;
+  // Si el estado actual no está en la lista, se agrega para que el selector no quede
+  // en blanco (antes se guardaba un estado vacío al solo agregar una nota).
+  const sel = document.getElementById('mEstado');
+  if (![...sel.options].some(o => o.value === estadoActual)) sel.add(new Option(estadoActual, estadoActual));
+  sel.value = estadoActual;
   document.getElementById('mNotas').value = '';
   document.getElementById('modalEst').classList.add('open');
 }
@@ -407,6 +480,8 @@ async function guardarEstado() {
   const ri = parseInt(document.getElementById('mRowIndex').value);
   const est = document.getElementById('mEstado').value;
   const notas = document.getElementById('mNotas').value.trim();
+  if (!est) { toast('Selecciona un estado', 'warn'); return; }
+  if (['Cancelado','Devuelto'].includes(est) && !notas) { toast('Escribe el motivo en Observaciones', 'warn'); return; }
   const btn = document.getElementById('btnGuardar');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Guardando...';
   try {
@@ -425,7 +500,7 @@ function verDetalle(ri) {
   document.getElementById('modalDetBody').innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:8px">
       <div><div style="font-family:'DM Mono',monospace;font-size:13px;color:#a78bfa;margin-bottom:4px">${esc(r.numero)}</div>
-      <div style="font-size:16px;font-weight:600;color:#fff">${esc(r.titulo||'Sin título')}</div></div>
+      <div style="font-size:16px;font-weight:600;color:#fff">${esc(r.titulo||'Sin título')}</div>${avisoDuplicada(r)}</div>
       ${badgeEst(r.estado)}
     </div>
     <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:rgba(255,255,255,.3);margin-bottom:6px">Proyecto</div>
@@ -476,9 +551,7 @@ async function cargarActas() {
 }
 
 function calcularPlazo(emailEstudiante) {
-  const rad = radicaciones.find(r =>
-    [r.emailEstudiante, r.email1, r.email2, r.email3].some(e => String(e||'').toLowerCase() === emailEstudiante.toLowerCase())
-  );
+  const rad = radicacionesDeCorreo(emailEstudiante)[0];
   if (!rad) return { texto: '—', alerta: false };
   const sems = [rad.semestre1, rad.semestre2, rad.semestre3].map(v => parseInt(v||0)).filter(n => n > 0);
   const semMax = sems.length ? Math.max(...sems) : 1;
@@ -502,6 +575,27 @@ function contarActas(emailEstudiante) {
 
 const ESTADOS_ACTAS_ACTIVOS = ['Pendiente revisión', 'Solicitud Fase 2'];
 
+// Detecta actas/solicitudes sin número de radicado o con un radicado que no es del
+// estudiante; sin el número correcto, aprobarlas no desbloquea la Fase 2.
+function avisoRadicadoActa(a) {
+  const numero = String(a.numero || '').trim();
+  const suyas  = radicacionesDeCorreo(a.emailEstudiante);
+  const activas = suyas.filter(esActiva);
+  if (!numero || /^[—–-]$/.test(numero)) {
+    const sugerencia = activas.length === 1
+      ? `Debe ser <strong>${esc(activas[0].numero)}</strong>: corríjalo en la hoja antes de aprobar.`
+      : activas.length > 1
+        ? `El estudiante tiene ${activas.length} radicaciones activas (${esc(activas.map(r => r.numero).join(', '))}): resuelva la duplicada primero.`
+        : 'El correo no está en ninguna radicación activa.';
+    return `<div class="dup-aviso" style="white-space:normal">⚠️ Sin número de radicado. ${sugerencia}</div>`;
+  }
+  const rad = radicaciones.find(r => r.numero === numero);
+  if (rad && !correosDe(rad).includes(String(a.emailEstudiante || '').trim().toLowerCase())) {
+    return `<div class="dup-aviso" style="white-space:normal">⚠️ Este correo no es estudiante de ${esc(numero)}${activas.length === 1 ? ` (su radicación es ${esc(activas[0].numero)})` : ''}.</div>`;
+  }
+  return '';
+}
+
 function renderActas() {
   const q  = (document.getElementById('searchActas').value || '').toLowerCase();
   const fE = document.getElementById('fEstActas').value;
@@ -523,9 +617,10 @@ function renderActas() {
       'Aprobada':           '<span class="badge b-aprobado">Aprobada</span>',
       'Rechazada':          '<span class="badge b-devuelto">Rechazada</span>',
       'Solicitud Fase 2':   '<span class="badge b-solicitud">📨 Solicitud Fase 2</span>'
-    }[a.estado] || `<span class="badge b-pend">${a.estado}</span>`;
+    }[a.estado] || `<span class="badge b-pend">${esc(a.estado)}</span>`;
 
     const plazo = calcularPlazo(a.emailEstudiante);
+    const avisoRad = avisoRadicadoActa(a);
     const total = contarActas(a.emailEstudiante);
     const plazoHtml = plazo.alerta
       ? `<div class="alerta-plazo">${esc(plazo.texto)}</div>`
@@ -537,7 +632,7 @@ function renderActas() {
 
     return `<tr>
       <td style="font-size:11px;color:rgba(255,255,255,.4);font-family:'DM Mono',monospace">${fmtFecha(a.fechaCarga)}</td>
-      <td><div class="num-rad">${esc(a.numero||'')}</div></td>
+      <td><div class="num-rad">${esc(a.numero||'')}</div>${avisoRad}</td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(a.emailEstudiante||'')}</td>
       <td style="font-size:12px">📄 ${esc(a.nombreArchivo||'')}</td>
       <td>${badgeActa}</td>
@@ -545,12 +640,23 @@ function renderActas() {
       <td style="text-align:center"><span style="font-size:14px;font-weight:600;color:#a78bfa">${total}</span></td>
       <td><div class="act">
         ${urlBtn}
-        ${esPendiente ? `<button class="btn gr" onclick="abrirModalActa(${a.rowIndex},'${esc(a.emailEstudiante)}','aprobar','${esc(a.numero||'')}','${esc(a.nombreArchivo||'')}')">✅ Aprobar</button>
-        <button class="btn rd" onclick="abrirModalActa(${a.rowIndex},'${esc(a.emailEstudiante)}','rechazar','${esc(a.numero||'')}','${esc(a.nombreArchivo||'')}')">✕ Rechazar</button>` : ''}
-        ${esSolicitud ? `<button class="btn bl" onclick="abrirModalSolicitud(${a.rowIndex},'${esc(a.emailEstudiante)}','${esc(a.numero||'')}')">📨 Ver solicitud</button>` : ''}
+        ${esPendiente ? `<button class="btn gr" onclick="abrirModalActaFila(${Number(a.rowIndex)},'aprobar')">✅ Aprobar</button>
+        <button class="btn rd" onclick="abrirModalActaFila(${Number(a.rowIndex)},'rechazar')">✕ Rechazar</button>` : ''}
+        ${esSolicitud ? `<button class="btn bl" onclick="abrirModalSolicitudFila(${Number(a.rowIndex)})">📨 Ver solicitud</button>` : ''}
       </div></td>
     </tr>`;
   }).join('');
+}
+
+// Los botones pasan solo el número de fila; los textos (correo, nombre de archivo)
+// se buscan aquí para que un apóstrofo o HTML en esos datos no rompa el onclick.
+function abrirModalActaFila(ri, accion) {
+  const a = actas.find(x => Number(x.rowIndex) === ri);
+  if (a) abrirModalActa(ri, a.emailEstudiante || '', accion, a.numero || '', a.nombreArchivo || '');
+}
+function abrirModalSolicitudFila(ri) {
+  const a = actas.find(x => Number(x.rowIndex) === ri);
+  if (a) abrirModalSolicitud(ri, a.emailEstudiante || '', a.numero || '');
 }
 
 function abrirModalActa(ri, email, accion, numero, archivo) {
@@ -598,6 +704,7 @@ function abrirModalSolicitud(ri, email, numero) {
     <div style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.25);border-radius:10px;padding:14px">
       <div style="font-size:13px;color:#93c5fd;margin-bottom:8px">📨 El estudiante solicita avanzar a Fase 2</div>
       <div style="font-size:12px;color:rgba(255,255,255,.6)">Radicación: <strong style="color:#a78bfa">${esc(numero)}</strong></div>
+      ${avisoRadicadoActa({ numero, emailEstudiante: email })}
       <div style="font-size:12px;color:rgba(255,255,255,.6);margin-top:4px">Actas totales: <strong>${total}</strong> · Aprobadas: <strong style="color:#34d399">${aprobadas}</strong></div>
     </div>`;
   document.getElementById('modalSolicitud').classList.add('open');

@@ -71,8 +71,91 @@ Construye `tr.innerHTML` con `p.numero`, `p.emailEstudiante`, `p.nombreArchivo`,
 
 ## Pendiente — corregible en este repositorio
 
-1. Corregir los dos XSS almacenados (#2 y #3).
-2. Quitar el `console.log` de depuración.
-3. Decidir qué hacer con `actas_asesoria.html` (conectarla al backend real o dejar explícito que aún no registra nada).
+1. ~~Corregir los dos XSS almacenados (#2 y #3).~~ Corregido (ver revisión de septiembre).
+2. ~~Quitar el `console.log` de depuración.~~ Corregido.
+3. `actas_asesoria.html`: ya muestra el radicado y las actas reales del estudiante; el botón "Ya envié mi acta" sigue sin registrar nada en el servidor (la acción real no está en este repositorio).
 4. Centralizar `URL_APP` y `esc()` en un archivo compartido.
 5. Agregar `Content-Security-Policy` básica.
+
+---
+
+# Revisión de septiembre 2026 — duplicados e inconsistencias de datos
+
+Motivo: casos reales en los que la plataforma no dejaba avanzar a estudiantes
+(Vanesa Cano, CTTG-2026-0010; Carolina Builes, CTTG-2026-0029/0058).
+
+## Advertencia importante: el repositorio no es la versión en producción
+
+Los datos de la hoja muestran acciones que **no existen en este repositorio**
+(`AVALAR_PROTOCOLO_FASE2`, `REGISTRAR_DECISION_COMITE`, solicitudes de modificación
+de radicación, confirmación de actas "post-envío del formulario web", etc.).
+Los últimos cambios de `main` son de abril. La versión que usan hoy estudiantes y
+coordinación está en otro lugar (probablemente dentro del propio Apps Script).
+Los arreglos de este repositorio solo llegan a producción si se publican donde
+realmente se sirve la plataforma. **Hay que traer ese código aquí** para poder
+revisarlo y corregirlo de verdad.
+
+## Causas encontradas en los datos
+
+| Problema | Ejemplo real | Efecto |
+|---|---|---|
+| Filas de prueba con el número de radicado de un estudiante real | Fase2 fila 2: `pruebaradicacion@` con CTTG-2026-0010 "Aprobado" | La plataforma cree que el protocolo ya se aprobó; no aparece para avalar y aprobarlo no cambia nada |
+| Solicitudes de Fase 2 guardadas sin número de radicado ("—") | 13 filas en "Acta asesoria" (Carolina, Vanesa, Ana Viveros, Anna Villota…) | Al aprobarlas, el sistema no sabe qué radicación desbloquear |
+| Mismo grupo con dos radicaciones activas | CTTG-2026-0029 y CTTG-2026-0058 | Solicitudes y actas quedan repartidas o sin radicado |
+| Solicitudes de modificación que guardan el **número de fila** | Anna Villota: RowFase1=50, pero su radicado está en la fila 49 | Aprobarla modificaría la radicación de **otro grupo** (fila 50 = CTTG-2026-0057) |
+| Protocolos enviados varias veces | Vanesa: 3 filas "Cargado" iguales | Varias filas pendientes por el mismo trámite |
+| La página de actas mostraba siempre "CTTG-2026-0010" (demo) y lo copiaba al portapapeles | `actas_asesoria.html` | Estudiantes podían registrar actas con el número de otro grupo |
+| El selector "Cambiar estado" no tenía "Tutores Avalados", "Fase 2 Desbloqueada" ni "Cancelado", y guardaba "Pendiente Comité" en vez de "Pendiente Comité Técnico" | `coordinadora_dashboard.html` | Al guardar solo una nota el estado quedaba vacío; el estudiante perdía acceso a actas |
+
+## Qué se agregó para identificar y manejar estos casos
+
+### 1. Revisión automática de la hoja: `apps_script/AuditoriaDatos.gs`
+
+Revisa la hoja de cálculo directamente (funciona con cualquier versión de la
+plataforma) y escribe la hoja **"Alertas de datos"** con prioridad, qué pasa y
+**qué hacer**. No modifica datos. Detecta:
+
+- Número de radicado repetido en Fase1.
+- Mismo grupo con más de una radicación activa, y estudiantes en varias radicaciones activas.
+- Estados con espacios de más o no reconocidos.
+- Registros de prueba (`prueba`, `test@`, `estudiante@`) mezclados con datos reales.
+- Protocolos de alguien ajeno al radicado (p. ej. pruebas sobre un número real), con radicado inexistente, o enviados varias veces.
+- Protocolo aprobado en Fase2 sin actualizar Fase1.
+- Actas y solicitudes de Fase 2 sin número de radicado (sugiere el número correcto) o con número de otro grupo.
+- Solicitudes de Fase 2 aprobadas cuya radicación sigue sin desbloquear.
+- Solicitudes de modificación cuyo número de fila ya no corresponde al radicado.
+- Usuarios repetidos.
+
+Las columnas **Gestión** (Pendiente / En proceso / Resuelto / Ignorar) y **Notas de
+gestión** se conservan entre ejecuciones. Instrucciones de instalación al inicio
+del archivo.
+
+Resultado sobre la hoja del 28-sep-2026: 34 alertas, 7 de prioridad ALTA.
+
+### 2. Panel de coordinación (`coordinadora_dashboard.html`)
+- Aviso **"⚠️ Duplicada con CTTG-…"** en la tabla y el detalle, métrica y filtro "Posibles duplicadas".
+- Estado **Cancelado** (con motivo obligatorio), más los estados que faltaban en el selector; ya no puede guardar un estado vacío.
+- Estados normalizados (espacios, mayúsculas, "Pendiente Comité" → "Pendiente Comité Técnico").
+- En Actas: aviso cuando un acta o solicitud de Fase 2 **no tiene radicado** (sugiere cuál es) o tiene el de otro grupo; también dentro del modal "Solicitud de Fase 2".
+- Los botones ya no incrustan textos del estudiante en el `onclick` (un apóstrofo en el nombre del archivo rompía el botón).
+
+### 3. Protocolos (`protocolo_coordinadora.html`)
+- Avisos de **envío repetido** (indica cuál es la fila más reciente) y de **otro protocolo "Aprobado" con el mismo número enviado por otra persona**.
+- Corregido el XSS: todos los datos se escapan.
+
+### 4. Estudiante (`estudiante_dashboard.html`, `actas_asesoria.html`)
+- Las fases se calculan con la radicación **vigente** (ignora canceladas) y no con la primera de la lista.
+- Las actas y el protocolo aprobado de **cualquier integrante del grupo** cuentan para todos; los de alguien ajeno con el mismo número (filas de prueba) no.
+- "Cancelado" ya no bloquea radicar de nuevo.
+- La página de actas muestra el radicado y las actas reales del estudiante.
+
+### 5. Fase 3 (`coordinadora_fase3.html`)
+- Corregido el XSS del botón "Asignar".
+
+## Pendiente — en el Apps Script (no está en este repositorio)
+1. `getFase2`/aval de protocolo: buscar por número de radicado **y** correo de un integrante, y tomar el envío más reciente; ignorar filas de otros correos.
+2. Al crear la solicitud de Fase 2 guardar siempre el número de radicado; si el estudiante tiene varias activas, pedirle que elija.
+3. Solicitudes de modificación: guardar y buscar por número de radicado, no por número de fila.
+4. `updateEstado`: aceptar "Cancelado" y no aceptar estados vacíos.
+5. `createRadicacion`: rechazar en el servidor si alguno de los estudiantes ya tiene una radicación activa.
+6. Contraseñas en texto plano en la hoja Usuarios.
