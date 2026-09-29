@@ -42,6 +42,11 @@
   .modal-button{background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:10px 16px;border-radius:6px;font-weight:600;cursor:pointer;font-size:13px;margin-top:16px;width:100%}
   .empty{text-align:center;padding:40px;color:rgba(255,255,255,.5);font-size:14px}
   .err{background:rgba(239,68,68,.15);border:1px solid rgba(239,68,68,.3);color:#fca5a5;border-radius:8px;padding:10px;font-size:12px;margin-bottom:12px;display:none}
+  .btn-historial{background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.2);color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif;transition:all .2s;display:flex;align-items:center;gap:8px}
+  .btn-historial:hover{background:rgba(255,255,255,.16)}
+  .btn-historial .chev{transition:transform .2s}
+  .btn-historial.open .chev{transform:rotate(180deg)}
+  .historial-count{background:rgba(255,255,255,.2);border-radius:20px;padding:1px 9px;font-size:11px}
 </style>
 </head>
 <body>
@@ -72,6 +77,35 @@
       </thead>
       <tbody id="tbody">
         <tr><td colspan="9" class="empty">Cargando protocolos...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin:16px 0">
+    <button class="btn-historial" id="btnHistorial" onclick="toggleHistorial()">
+      <span class="chev">▾</span>
+      Ver historial (aprobados / devueltos)
+      <span class="historial-count" id="historialCount">0</span>
+    </button>
+  </div>
+
+  <div class="table-container" id="historialContainer" style="display:none">
+    <table id="tablaHistorial">
+      <thead>
+        <tr>
+          <th>N° Radicación</th>
+          <th>Estudiante</th>
+          <th>Archivo</th>
+          <th>Fecha Carga</th>
+          <th>Anexo</th>
+          <th>Estado</th>
+          <th>Evaluador</th>
+          <th>Decisión</th>
+          <th>Acciones</th>
+        </tr>
+      </thead>
+      <tbody id="tbodyHistorial">
+        <tr><td colspan="9" class="empty">Pulsa "Ver historial" para cargarlo.</td></tr>
       </tbody>
     </table>
   </div>
@@ -133,6 +167,9 @@
  <script>
 const URL_APP = "https://script.google.com/macros/s/AKfycbxThWOEZZWmJTZ9SsAdEOE7a2e0ai9uddlZBGTUz7rt-iq2VepCf0YC8r4trjAiF7MhlA/exec";
 let protocoloActual = null;
+let protocolosData = [];
+let historialRenderizado = false;
+const ESTADOS_TRAMITADOS = ['Aprobado', 'Devuelto'];
 
 document.addEventListener('DOMContentLoaded', function() {
   const user = JSON.parse(localStorage.getItem('cttg_admin') || '{}');
@@ -150,44 +187,123 @@ function cargarProtocolos() {
   })
   .then(r => r.json())
   .then(data => {
-    const tbody = document.getElementById('tbody');
-    tbody.innerHTML = '';
+    if (!data.success) throw new Error(data.error || 'Error desconocido');
+    protocolosData = data.protocolos || [];
+    historialRenderizado = false;
 
-    if (data.success && data.protocolos && data.protocolos.length > 0) {
-      data.protocolos.forEach(p => {
-        const tr = document.createElement('tr');
-        const estadoBadge = {
-          'Enviado': '<span class="badge badge-enviado">📤 Enviado</span>',
-          'En Evaluación': '<span class="badge badge-evaluacion">📝 Evaluando</span>',
-          'Aprobado': '<span class="badge badge-aprobado">✅ Aprobado</span>',
-          'Devuelto': '<span class="badge badge-devuelto">↩️ Devuelto</span>'
-        }[p.estado] || p.estado;
+    const tramitados = protocolosData.filter(p => ESTADOS_TRAMITADOS.includes(p.estado));
+    document.getElementById('historialCount').textContent = tramitados.length;
+    document.getElementById('historialContainer').style.display = 'none';
+    document.getElementById('btnHistorial').classList.remove('open');
+    document.getElementById('tbodyHistorial').innerHTML = '<tr><td colspan="9" class="empty">Pulsa "Ver historial" para cargarlo.</td></tr>';
 
-        tr.innerHTML = `
-          <td><strong>${p.numero}</strong></td>
-          <td>${p.emailEstudiante}</td>
-          <td>${p.urlArchivo && p.urlArchivo.startsWith('http') ? `<a href="${p.urlArchivo}" target="_blank" rel="noopener noreferrer" style="color:#a5b4fc;text-decoration:none">📄 ${p.nombreArchivo.substring(0,30)}</a>` : `<span style="color:rgba(255,255,255,.5);font-size:12px">📧 ${p.nombreArchivo.substring(0,30)}</span>`}</td>
-          <td>${p.fechaCarga}</td>
-          <td>${p.anexoCambio}</td>
-          <td>${estadoBadge}</td>
-          <td>${p.evaluador || '—'}</td>
-          <td>${p.decision || '—'}</td>
-          <td>
-            <div class="actions">
-              <button class="btn-small btn-view" onclick="abrirModal('${p.numero}', ${p.rowIndex})">Evaluar</button>
-            </div>
-          </td>
-        `;
-        tbody.appendChild(tr);
-      });
-    } else {
-      tbody.innerHTML = '<tr><td colspan="9" class="empty">No hay protocolos para evaluar</td></tr>';
-    }
+    renderActivos();
   })
   .catch(e => {
     document.getElementById('err').textContent = 'Error al cargar protocolos: ' + e.message;
     document.getElementById('err').style.display = 'block';
   });
+}
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+const lower = s => String(s || '').trim().toLowerCase();
+
+// Avisos para identificar protocolos repetidos o que chocan con otro registro del mismo número.
+function avisosProtocolo(p) {
+  const avisos = [];
+  const mismoNumero = protocolosData.filter(x => lower(x.numero) === lower(p.numero));
+  if (!ESTADOS_TRAMITADOS.includes(p.estado)) {
+    const repetidos = mismoNumero.filter(x => lower(x.emailEstudiante) === lower(p.emailEstudiante) && !ESTADOS_TRAMITADOS.includes(x.estado));
+    if (repetidos.length > 1) {
+      const masReciente = repetidos[repetidos.length - 1];
+      avisos.push(masReciente === p
+        ? `Enviado ${repetidos.length} veces: esta es la fila más reciente, tramite esta.`
+        : `Envío repetido (hay ${repetidos.length}). Tramite solo la fila más reciente.`);
+    }
+  }
+  const ajenosAprobados = mismoNumero.filter(x => x !== p && x.estado === 'Aprobado' && lower(x.emailEstudiante) !== lower(p.emailEstudiante));
+  if (ajenosAprobados.length) {
+    avisos.push(`Hay otro protocolo "Aprobado" con este número enviado por ${ajenosAprobados.map(x => x.emailEstudiante).join(', ')}. Si es un registro de prueba, cambie su número en la hoja Fase2.`);
+  }
+  return avisos.map(t => `<div style="margin-top:4px;font-size:11px;color:#fca5a5">⚠️ ${esc(t)}</div>`).join('');
+}
+
+function filaProtocolo(p) {
+  const tr = document.createElement('tr');
+  const estadoBadge = {
+    'Enviado': '<span class="badge badge-enviado">📤 Enviado</span>',
+    'En Evaluación': '<span class="badge badge-evaluacion">📝 Evaluando</span>',
+    'Aprobado': '<span class="badge badge-aprobado">✅ Aprobado</span>',
+    'Devuelto': '<span class="badge badge-devuelto">↩️ Devuelto</span>'
+  }[p.estado] || esc(p.estado);
+  const nombre = esc(String(p.nombreArchivo || '').substring(0, 30));
+  const url = String(p.urlArchivo || '');
+
+  tr.innerHTML = `
+    <td><strong>${esc(p.numero)}</strong>${avisosProtocolo(p)}</td>
+    <td>${esc(p.emailEstudiante)}</td>
+    <td>${/^https?:\/\//i.test(url) ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#a5b4fc;text-decoration:none">📄 ${nombre}</a>` : `<span style="color:rgba(255,255,255,.5);font-size:12px">📧 ${nombre}</span>`}</td>
+    <td>${esc(p.fechaCarga)}</td>
+    <td>${esc(p.anexoCambio)}</td>
+    <td>${estadoBadge}</td>
+    <td>${esc(p.evaluador || '—')}</td>
+    <td>${esc(p.decision || '—')}</td>
+    <td>
+      <div class="actions">
+        ${ESTADOS_TRAMITADOS.includes(p.estado)
+          ? `<span style="color:rgba(255,255,255,.4);font-size:12px">Tramitado</span>`
+          : `<button class="btn-small btn-view" onclick="abrirModalFila(${Number(p.rowIndex)})">Evaluar</button>`}
+      </div>
+    </td>
+  `;
+  return tr;
+}
+
+function abrirModalFila(rowIndex) {
+  const p = protocolosData.find(x => Number(x.rowIndex) === rowIndex);
+  if (p) abrirModal(p.numero, rowIndex);
+}
+
+function renderActivos() {
+  const activos = protocolosData.filter(p => !ESTADOS_TRAMITADOS.includes(p.estado));
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+  if (activos.length) {
+    activos.forEach(p => tbody.appendChild(filaProtocolo(p)));
+  } else {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">No hay protocolos pendientes de evaluación 🎉</td></tr>';
+  }
+}
+
+// El historial (aprobados/devueltos) solo se pinta en el DOM cuando se abre,
+// para no recargar la tabla con datos ya tramitados y mantener el panel liviano.
+function toggleHistorial() {
+  const cont = document.getElementById('historialContainer');
+  const btn  = document.getElementById('btnHistorial');
+  const abierto = cont.style.display !== 'none';
+
+  if (abierto) {
+    cont.style.display = 'none';
+    btn.classList.remove('open');
+    return;
+  }
+
+  cont.style.display = 'block';
+  btn.classList.add('open');
+
+  if (!historialRenderizado) {
+    const tramitados = protocolosData.filter(p => ESTADOS_TRAMITADOS.includes(p.estado));
+    const tbodyH = document.getElementById('tbodyHistorial');
+    tbodyH.innerHTML = '';
+    if (tramitados.length) {
+      tramitados.forEach(p => tbodyH.appendChild(filaProtocolo(p)));
+    } else {
+      tbodyH.innerHTML = '<tr><td colspan="9" class="empty">Aún no hay protocolos tramitados.</td></tr>';
+    }
+    historialRenderizado = true;
+  }
 }
 
 function abrirModal(numero, rowIndex) {

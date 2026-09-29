@@ -7,7 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Outfit',sans-serif;background:#0f0f1a;color:#e2e8f0;min-height:100vh}
+  body{font-family:'Outfit',sans-serif;background:linear-gradient(160deg,#221a3d 0%,#1c2440 55%,#141a2e 100%);background-attachment:fixed;color:#e2e8f0;min-height:100vh}
   header{background:linear-gradient(135deg,#1a0533,#2d1b69);border-bottom:1px solid rgba(255,255,255,.08);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;flex-wrap:wrap;gap:10px}
   .hdr-l{display:flex;align-items:center;gap:10px}
   .logo{width:38px;height:38px;background:linear-gradient(135deg,#667eea,#764ba2);border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:20px}
@@ -86,13 +86,13 @@
     <div><h1>CTTG Medicina</h1><p>Actas de Asesoría</p></div>
   </div>
   <div class="hdr-r">
-    <div class="user-chip">Demo Estudiante</div>
-    <button class="btn-out">Salir</button>
+    <div class="user-chip" id="userChip">—</div>
+    <button class="btn-out" onclick="salir()">Salir</button>
   </div>
 </header>
 
 <main>
-  <a href="#" class="back">← Volver al dashboard</a>
+  <a href="estudiante_dashboard.html" class="back">← Volver al dashboard</a>
 
   <div class="tabs">
     <button class="tab on" onclick="switchTab('mis-actas',this)">📋 Mis Actas</button>
@@ -106,13 +106,8 @@
         <thead><tr>
           <th>Fecha</th><th>N° Radicación</th><th>Observaciones</th><th>Estado</th>
         </tr></thead>
-        <tbody>
-          <tr>
-            <td style="font-size:12px;color:rgba(255,255,255,.5)">15/04/2026</td>
-            <td style="font-size:12px;color:#a78bfa;font-weight:600">CTTG-2026-0010</td>
-            <td style="font-size:12px;color:rgba(255,255,255,.5)">Sesión 1 — revisión marco teórico</td>
-            <td><span class="badge b-pend">Pendiente revisión</span></td>
-          </tr>
+        <tbody id="tbodyActas">
+          <tr><td colspan="4" class="empty"><span class="spinner"></span>Cargando actas...</td></tr>
         </tbody>
       </table>
     </div>
@@ -128,7 +123,7 @@
       <div class="rad-numero">
         <div>
           <div class="label">Tu número de radicación</div>
-          <div class="num">CTTG-2026-0010</div>
+          <div class="num" id="numRad">Cargando...</div>
         </div>
         <button class="copy-btn" onclick="copiar()">📋 Copiar</button>
       </div>
@@ -191,6 +186,65 @@
 <div class="toast" id="toast"></div>
 
 <script>
+const URL_APP = "https://script.google.com/macros/s/AKfycbxThWOEZZWmJTZ9SsAdEOE7a2e0ai9uddlZBGTUz7rt-iq2VepCf0YC8r4trjAiF7MhlA/exec";
+// Antes esta página mostraba y copiaba siempre "CTTG-2026-0010" (dato de demostración):
+// cualquier estudiante que lo copiara al formulario quedaba registrado con el radicado de otro grupo.
+let numeroRadicado = '';
+const user = JSON.parse(localStorage.getItem('cttg_user') || 'null');
+const ESTADOS_NO_VIGENTES = ['Cancelado','Devuelto'];
+
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+const lower = s => String(s || '').trim().toLowerCase();
+function salir() { localStorage.removeItem('cttg_user'); window.location.href = 'index.html'; }
+
+(async function init() {
+  if (!user || user.rol !== 'estudiante') { window.location.href = 'estudiante_login.html'; return; }
+  document.getElementById('userChip').textContent = user.nombre || user.email;
+  let vigente = null;
+  try {
+    const res = await fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getFase1ByEmail', email: user.email }) });
+    const d = await res.json();
+    const lista = (d.radicaciones || []).map(r => ({ ...r, estado: String(r.estado || '').trim() }));
+    const vigentes = lista.filter(r => !ESTADOS_NO_VIGENTES.includes(r.estado))
+      .sort((a, b) => String(b.fechaRadicacion || '').localeCompare(String(a.fechaRadicacion || '')));
+    vigente = vigentes[0] || null;
+    if (vigentes.length > 1) {
+      toast('Tienes ' + vigentes.length + ' radicaciones activas. Escribe a coordinación para cancelar la que no aplica.', 'warn');
+    }
+  } catch (e) {}
+  numeroRadicado = vigente ? vigente.numero : '';
+  document.getElementById('numRad').textContent = numeroRadicado || 'Sin radicación activa';
+  cargarMisActas(vigente);
+})();
+
+async function cargarMisActas(vigente) {
+  const tbody = document.getElementById('tbodyActas');
+  try {
+    const res = await fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getActasAsesoria' }) });
+    const d = await res.json();
+    if (!d.success) throw new Error(d.error);
+    const grupo = vigente ? [vigente.emailEstudiante, vigente.email1, vigente.email2, vigente.email3].map(lower) : [];
+    grupo.push(lower(user.email));
+    const mias = (d.actas || []).filter(a => grupo.includes(lower(a.emailEstudiante)));
+    if (!mias.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">Aún no tienes actas registradas.</td></tr>'; return; }
+    const clase = { 'Aprobada':'b-aprobada', 'Rechazada':'b-rechazada' };
+    tbody.innerHTML = mias.map(a => `<tr>
+      <td style="font-size:12px;color:rgba(255,255,255,.5)">${esc(a.fechaCarga ? new Date(a.fechaCarga).toLocaleDateString('es-CO') : '—')}</td>
+      <td style="font-size:12px;color:#a78bfa;font-weight:600">${esc(a.numero || '—')}</td>
+      <td style="font-size:12px;color:rgba(255,255,255,.5)">${esc(a.observaciones || a.nombreArchivo || '')}</td>
+      <td><span class="badge ${clase[a.estado] || 'b-pend'}">${esc(a.estado)}</span></td>
+    </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">No se pudieron cargar tus actas. Intenta de nuevo.</td></tr>';
+  }
+}
+
+function toast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast ' + type + ' show';
+  setTimeout(() => t.classList.remove('show'), 4000);
+}
+
 function switchTab(name, btn) {
   document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
   document.querySelectorAll('.tab').forEach(b => b.classList.remove('on'));
@@ -198,10 +252,9 @@ function switchTab(name, btn) {
   btn.classList.add('on');
 }
 function copiar() {
-  navigator.clipboard.writeText('CTTG-2026-0010');
-  const t = document.getElementById('toast');
-  t.textContent = 'Número copiado ✓'; t.className = 'toast ok show';
-  setTimeout(() => t.classList.remove('show'), 2500);
+  if (!numeroRadicado) { toast('No tienes una radicación activa para copiar.', 'warn'); return; }
+  navigator.clipboard.writeText(numeroRadicado);
+  toast('Número copiado ✓', 'ok');
 }
 function marcarPasos() {
   setTimeout(() => {

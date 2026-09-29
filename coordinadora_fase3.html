@@ -7,7 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Outfit',sans-serif;background:#0a0f1a;color:#e2e8f0;min-height:100vh}
+  body{font-family:'Outfit',sans-serif;background:linear-gradient(160deg,#123a2e 0%,#16233a 55%,#101827 100%);background-attachment:fixed;color:#e2e8f0;min-height:100vh}
   header{background:linear-gradient(135deg,#064e3b,#059669 80%,#1a3a5c);border-bottom:1px solid rgba(255,255,255,.08);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;flex-wrap:wrap;gap:10px}
   .hdr-l{display:flex;align-items:center;gap:10px}
   .logo{width:40px;height:40px;background:linear-gradient(135deg,#059669,#10b981);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px}
@@ -272,11 +272,11 @@ function renderTablas() {
     tbA.innerHTML = sinFecha.map(r => `<tr>
       <td><div class="num-rad">${esc(r.numero)}</div></td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.emailEstudiante)}</td>
-      <td style="font-size:13px">${r.semestre}${r.alertaS12==='SÍ'?'<span class="alert-s12">⚠️ S12</span>':''}</td>
-      <td style="font-size:12px;color:${parseFloat(r.pctTurnitin)>=20?'#fca5a5':'#6ee7b7'}">${r.pctTurnitin||'—'}%</td>
+      <td style="font-size:13px">${esc(r.semestre)}${r.alertaS12==='SÍ'?'<span class="alert-s12">⚠️ S12</span>':''}</td>
+      <td style="font-size:12px;color:${parseFloat(r.pctTurnitin)>=20?'#fca5a5':'#6ee7b7'}">${esc(r.pctTurnitin||'—')}%</td>
       <td style="font-family:'DM Mono',monospace;font-size:11px;color:rgba(255,255,255,.4)">${fmtFecha(r.fechaCarga)}</td>
       <td style="font-size:12px;color:rgba(255,255,255,.5)">${esc(([r.jurado1Nombre,r.jurado2Nombre].filter(Boolean).join(', ')||'—'))}</td>
-      <td><button class="btn gr" onclick="abrirAsignar(${r.rowIndex},'${esc(r.numero)}',${JSON.stringify(r).replace(/'/g,"&#39;")})">📅 Asignar</button></td>
+      <td><button class="btn gr" onclick="abrirAsignarFila(${Number(r.rowIndex)})">📅 Asignar</button></td>
     </tr>`).join('');
   }
 
@@ -290,12 +290,23 @@ function renderTablas() {
       <td><div class="num-rad">${esc(r.numero)}</div></td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.emailEstudiante)}</td>
       <td style="font-family:'DM Mono',monospace;font-size:12px;color:#fcd34d">${fmtFecha(r.fechaSustentacion)}</td>
-      <td style="font-size:12px;color:rgba(255,255,255,.5)">${r.horaSustentacion||'—'}</td>
+      <td style="font-size:12px;color:rgba(255,255,255,.5)">${esc(r.horaSustentacion||'—')}</td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.jurado1Nombre||'—')}</td>
       <td style="font-size:12px;color:rgba(255,255,255,.6)">${esc(r.jurado2Nombre||'—')}</td>
-      <td><button class="btn bl" onclick="abrirResultado(${r.rowIndex},'${esc(r.numero)}')">🎓 Registrar</button></td>
+      <td><button class="btn bl" onclick="abrirResultadoFila(${Number(r.rowIndex)})">🎓 Registrar</button></td>
     </tr>`).join('');
   }
+}
+
+// Los botones pasan solo la fila; los datos se toman de `fase3` para que un título o
+// nombre con comillas/HTML no pueda inyectar código en el onclick.
+function abrirAsignarFila(rowIndex) {
+  const r = fase3.find(x => Number(x.rowIndex) === rowIndex);
+  if (r) abrirAsignar(rowIndex, r.numero, r);
+}
+function abrirResultadoFila(rowIndex) {
+  const r = fase3.find(x => Number(x.rowIndex) === rowIndex);
+  if (r) abrirResultado(rowIndex, r.numero);
 }
 
 function abrirAsignar(rowIndex, numero, r) {

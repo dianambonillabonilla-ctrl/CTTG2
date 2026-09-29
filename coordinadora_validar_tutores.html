@@ -7,7 +7,7 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Mono:wght@400;500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'Outfit',sans-serif;background:#0a0f1a;color:#e2e8f0;min-height:100vh}
+  body{font-family:'Outfit',sans-serif;background:linear-gradient(160deg,#123a2e 0%,#16233a 55%,#101827 100%);background-attachment:fixed;color:#e2e8f0;min-height:100vh}
   header{background:linear-gradient(135deg,#064e3b,#059669 80%,#1a3a5c);border-bottom:1px solid rgba(255,255,255,.08);padding:14px 28px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50;flex-wrap:wrap;gap:10px}
   .hdr-l{display:flex;align-items:center;gap:10px}
   .logo{width:40px;height:40px;background:linear-gradient(135deg,#059669,#10b981);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px}
@@ -34,7 +34,7 @@
   input,select,textarea{background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);border-radius:9px;color:#fff;font-family:'Outfit',sans-serif;font-size:13px;padding:10px 13px;outline:none;transition:border-color .2s;width:100%}
   input::placeholder{color:rgba(255,255,255,.25)}
   input:focus,select:focus,textarea:focus{border-color:rgba(52,211,153,.6);background:rgba(255,255,255,.1)}
-  select option{background:#0a0f1a}
+  select option{background:#16233a}
   textarea{min-height:65px;resize:vertical}
   .info-box{background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:8px;padding:10px 13px;font-size:12px;color:#6ee7b7;margin-top:8px}
   .btn-action{background:linear-gradient(135deg,#059669,#10b981);color:#fff;border:none;padding:12px 28px;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer;font-family:'Outfit',sans-serif;box-shadow:0 4px 15px rgba(16,185,129,.4);transition:all .2s}
@@ -232,6 +232,13 @@ async function cargarDatos() {
   }
 }
 
+function mapVinculo(v) {
+  if (v === 'Si' || v === 'No') return v;
+  if (v === 'Profesor con Vinculo laboral con la USC') return 'Si';
+  if (v === 'Profesor SIN Vinculo laboral con la USC') return 'No';
+  return '';
+}
+
 function poblarFormulario() {
   const r = radicacion;
   document.getElementById('infoNumero').textContent = '📋 ' + r.numero;
@@ -242,11 +249,11 @@ function poblarFormulario() {
   document.getElementById('t1Nombre').value   = r.tutor1Nombre    || '';
   document.getElementById('t1Email').value    = r.tutor1Email     || '';
   document.getElementById('t1Telefono').value = r.tutor1Telefono  || '';
-  document.getElementById('t1Relacion').value = (r.tutor1Relacion === 'Si' || r.tutor1Relacion === 'No') ? r.tutor1Relacion : 'No';
+  document.getElementById('t1Relacion').value = mapVinculo(r.tutor1Relacion) || 'No';
   document.getElementById('t2Nombre').value   = r.tutor2Nombre    || '';
   document.getElementById('t2Email').value    = r.tutor2Email     || '';
   document.getElementById('t2Telefono').value = r.tutor2Telefono  || '';
-  document.getElementById('t2Relacion').value = (r.tutor2Relacion === 'Si' || r.tutor2Relacion === 'No') ? r.tutor2Relacion : '';
+  document.getElementById('t2Relacion').value = r.tutor2Nombre ? (mapVinculo(r.tutor2Relacion) || 'No') : '';
   document.getElementById('observaciones').value = r.notas || '';
 
   document.getElementById('loadWrap').style.display  = 'none';
