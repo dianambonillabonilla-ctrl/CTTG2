@@ -456,22 +456,11 @@ async function cargarMisRad() {
         tabNueva.style.opacity = '1';
         setFormularioSoloLectura(false);
       }
-      wrap.innerHTML = misRadicaciones.map(r => {
-        const notasLimpias = limpiarNotas(r.notas);
-        return `<div class="rad-card">
-          <div class="num">📋 ${esc(r.numero)}</div>
-          <div class="titulo">${esc(r.titulo||'Sin título')}</div>
-          <div class="rad-meta">
-            ${badgeEst(r.estado)}
-            <span class="date-info">📅 ${fmtFecha(r.fechaRadicacion)}</span>
-            ${r.modalidad ? `<span class="date-info">· ${esc(r.modalidad)}</span>` : ''}
-            ${r.fechaAprobacion ? `<span class="date-info">✅ ${fmtFecha(r.fechaAprobacion)}</span>` : ''}
-          </div>
-          ${construirCajaTiempos(r)}
-          ${notasLimpias ? `<div class="notas-box">📝 ${esc(notasLimpias)}</div>` : ''}
-          <button class="btn-det" onclick="verDetalle(${r.rowIndex})">👁 Ver detalle</button>
-        </div>`;
-      }).join('');
+      // Las cerradas (canceladas, devueltas, sustentadas…) se muestran plegadas debajo.
+      const enTramite = misRadicaciones.filter(r => !ESTADOS_CERRADOS.includes(r.estado) || r.estado === 'Aprobado');
+      const cerradas  = misRadicaciones.filter(r => !enTramite.includes(r));
+      wrap.innerHTML = (enTramite.length ? enTramite.map(tarjetaRadicacion).join('') : '<div class="empty">No tienes radicaciones en trámite.</div>')
+        + (cerradas.length ? `<details style="margin-top:14px"><summary style="cursor:pointer;color:rgba(255,255,255,.6);font-size:13px">📁 Ver radicaciones anteriores (${cerradas.length})</summary>${cerradas.map(tarjetaRadicacion).join('')}</details>` : '');
     } else {
       misRadicaciones = [];
       bloquearNuevaRad = false;
@@ -488,6 +477,23 @@ async function cargarMisRad() {
     }
     await actualizarBotonesFases(misRadicaciones);
   } catch(e) { wrap.innerHTML = '<div class="empty">Error al cargar. Intenta de nuevo.</div>'; }
+}
+
+function tarjetaRadicacion(r) {
+  const notasLimpias = limpiarNotas(r.notas);
+  return `<div class="rad-card">
+    <div class="num">📋 ${esc(r.numero)}</div>
+    <div class="titulo">${esc(r.titulo||'Sin título')}</div>
+    <div class="rad-meta">
+      ${badgeEst(r.estado)}
+      <span class="date-info">📅 ${fmtFecha(r.fechaRadicacion)}</span>
+      ${r.modalidad ? `<span class="date-info">· ${esc(r.modalidad)}</span>` : ''}
+      ${r.fechaAprobacion ? `<span class="date-info">✅ ${fmtFecha(r.fechaAprobacion)}</span>` : ''}
+    </div>
+    ${ESTADOS_CERRADOS.includes(r.estado) && r.estado !== 'Aprobado' ? '' : construirCajaTiempos(r)}
+    ${notasLimpias ? `<div class="notas-box">📝 ${esc(notasLimpias)}</div>` : ''}
+    <button class="btn-det" onclick="verDetalle(${r.rowIndex})">👁 Ver detalle</button>
+  </div>`;
 }
 
 async function actualizarBotonesFases(radicaciones) {
@@ -564,7 +570,8 @@ async function actualizarBotonesFases(radicaciones) {
     const dF2   = await resF2.json();
     if (dF2.success) {
       fase2Aprobada = (dF2.protocolos || []).some(p =>
-        esDelGrupo(p.emailEstudiante) && lower(p.numero) === lower(vigente.numero) && p.estado === 'Aprobado'
+        // La hoja usa "Aprobado" y también "Aprobado Directo": ambos habilitan la Fase 3.
+        esDelGrupo(p.emailEstudiante) && lower(p.numero) === lower(vigente.numero) && /^aprobado/.test(lower(p.estado))
       );
     }
   } catch(e) {}

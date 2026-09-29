@@ -1,9 +1,16 @@
 /**
- * CTTG Medicina — Auditoría de datos (duplicados e inconsistencias)
+ * CTTG Medicina — Auditoría de datos y seguimiento por fase
  * ------------------------------------------------------------------
- * Revisa las hojas Fase1, Fase2, Acta asesoria, Solicitudes_Mod_Radicacion
- * y Usuarios, y escribe cada problema encontrado en la hoja
- * "Alertas de datos", con la acción recomendada para resolverlo.
+ * Revisa las hojas Fase1, Fase2, Fase 3, Acta asesoria, Fecha reuniones,
+ * Solicitudes_Mod_Radicacion y Usuarios, y escribe cada problema encontrado
+ * en la hoja "Alertas de datos", indicando la fase en la que ocurre y la
+ * acción recomendada para resolverlo:
+ *   - Duplicados e inconsistencias (radicaciones repetidas, filas de prueba,
+ *     registros sin número de radicado, filas corridas…).
+ *   - Seguimiento de cada fase: trámites detenidos más tiempo del debido
+ *     (tutores sin respuesta, actas sin revisar, protocolos sin avalar,
+ *     comités realizados sin decisión, sustentaciones sin nota…) y datos
+ *     que impiden avanzar (jurados sin cédula válida, Turnitin alto…).
  *
  * NO modifica ningún dato: solo lee y reporta.
  *
@@ -44,6 +51,16 @@ var ESTADOS_FASE1_VALIDOS = [
 // Palabras que delatan correos de prueba.
 var PATRONES_PRUEBA = [/prueba/i, /^test@/i, /^estudiante@/i, /^demo/i];
 
+// Plazos del seguimiento por fase (ajustables).
+var PLAZOS = {
+  respuestaTutoresDiasHabiles: 15,   // Fase 1: aval de tutores desde la radicación
+  revisionActaDiasHabiles: 5,        // Actas: revisión por coordinación
+  avalProtocoloDiasHabiles: 5,       // Fase 2: protocolo "Cargado" sin avalar
+  cargaProtocoloDias: 30,            // Fase 2 desbloqueada sin protocolo
+  programarSustentacionDias: 30,     // Fase 3: jurados aprobados sin fecha
+  turnitinMaximo: 20                 // Fase 3: % de similitud permitido
+};
+
 // ─────────────────────────────────────────────────────────────────────
 // Punto de entrada en Apps Script
 // ─────────────────────────────────────────────────────────────────────
@@ -54,12 +71,12 @@ function auditarDatosCTTG() {
     : SpreadsheetApp.getActiveSpreadsheet();
 
   var hojas = {};
-  ['Fase1', 'Fase2', 'Acta asesoria', 'Solicitudes_Mod_Radicacion', 'Usuarios'].forEach(function (n) {
+  ['Fase1', 'Fase2', 'Fase 3', 'Acta asesoria', 'Fecha reuniones', 'Solicitudes_Mod_Radicacion', 'Usuarios'].forEach(function (n) {
     var sh = ss.getSheetByName(n);
     hojas[n] = sh ? sh.getDataRange().getValues() : null;
   });
 
-  var alertas = auditarHojasCTTG_(hojas);
+  var alertas = auditarHojasCTTG_(hojas, new Date());
   escribirAlertas_(ss, alertas);
 
   var altas = alertas.filter(function (a) { return a.severidad === 'ALTA'; }).length;
@@ -73,7 +90,7 @@ function auditarDatosCTTG() {
 function agregarMenuAuditoriaCTTG() {
   SpreadsheetApp.getUi()
     .createMenu('CTTG')
-    .addItem('Revisar duplicados e inconsistencias', 'auditarDatosCTTG')
+    .addItem('Revisar fases, duplicados e inconsistencias', 'auditarDatosCTTG')
     .addToUi();
 }
 
@@ -89,10 +106,12 @@ function programarAuditoriaDiariaCTTG() {
 // la lista de alertas; no toca la hoja de cálculo)
 // ─────────────────────────────────────────────────────────────────────
 
-function auditarHojasCTTG_(hojas) {
+function auditarHojasCTTG_(hojas, hoy) {
+  hoy = soloFecha_(hoy || new Date());
   var alertas = [];
-  function alerta(sev, tipo, hoja, fila, radicado, correo, detalle, accion) {
+  function alerta(sev, tipo, hoja, fila, radicado, correo, detalle, accion, fase) {
     alertas.push({
+      fase: fase || faseDe_(hoja, tipo),
       severidad: sev, tipo: tipo, hoja: hoja, fila: fila || '',
       radicado: radicado || '', correo: correo || '', detalle: detalle, accion: accion
     });
@@ -112,6 +131,10 @@ function auditarHojasCTTG_(hojas) {
   var cCed   = [1, 2, 3].map(function (i) { return col_(f1, ['cedula ' + i]); });
   var cMail  = [1, 2, 3].map(function (i) { return col_(f1, ['email ' + i]); });
   var cNom   = [1, 2, 3].map(function (i) { return col_(f1, ['nombre ' + i]); });
+  var cSem   = [1, 2, 3].map(function (i) { return col_(f1, ['semestre ' + i]); });
+  var cFRad  = col_(f1, ['fecha radicacion']);
+  var cMod   = col_(f1, ['modalidad']);
+  var cT1Mail = col_(f1, ['tutor 1 - email']);
 
   var rads = [];            // una entrada por fila de Fase1
   var porNumero = {};       // numero -> [rad]
@@ -123,6 +146,8 @@ function auditarHojasCTTG_(hojas) {
       fila: r.fila, numero: numero, estadoCrudo: estadoCrudo,
       estado: norm_(estadoCrudo), titulo: texto_(r.v[cTit]),
       quien: correo_(r.v[cQuien]),
+      fechaRad: fecha_(r.v[cFRad]), modalidad: texto_(r.v[cMod]),
+      tutor1Email: correo_(r.v[cT1Mail]), semestre: 0, celdasError: [],
       correos: [], cedulas: [], nombres: []
     };
     if (rad.quien) rad.correos.push(rad.quien);
@@ -130,7 +155,9 @@ function auditarHojasCTTG_(hojas) {
       var c = correo_(r.v[cMail[i]]); if (c && rad.correos.indexOf(c) < 0) rad.correos.push(c);
       var d = cedula_(r.v[cCed[i]]);  if (d && rad.cedulas.indexOf(d) < 0) rad.cedulas.push(d);
       var n = texto_(r.v[cNom[i]]);   if (n) rad.nombres.push(n);
+      var s = parseInt(r.v[cSem[i]], 10); if (s > rad.semestre) rad.semestre = s;
     }
+    r.v.forEach(function (v, j) { if (/^#(ERROR|REF|VALUE|N\/A|NAME)/.test(String(v))) rad.celdasError.push(f1.encabezadoOriginal[j]); });
     rad.activa = ESTADOS_CERRADOS_FASE1.indexOf(rad.estado) < 0;
     rads.push(rad);
     (porNumero[numero] = porNumero[numero] || []).push(rad);
@@ -227,10 +254,14 @@ function auditarHojasCTTG_(hojas) {
   var c2Mail = col_(f2, ['email estudiante']);
   var c2Est = col_(f2, ['estado']);
   var c2Fecha = col_(f2, ['fecha radicacion', 'fecha de solicitud']);
+  var c2Eval = col_(f2, ['evaluadores', 'evaluador']);
+  var c2FCom = col_(f2, ['fecha comite']);
+  var c2Acta = col_(f2, ['numero de acta']);
   var protos = f2.filas.map(function (r) {
     return {
       fila: r.fila, numero: texto_(r.v[c2Rad]), correo: correo_(r.v[c2Mail]),
-      estadoCrudo: texto_(r.v[c2Est]), estado: norm_(r.v[c2Est]), fecha: r.v[c2Fecha]
+      estadoCrudo: texto_(r.v[c2Est]), estado: norm_(r.v[c2Est]), fecha: fecha_(r.v[c2Fecha]),
+      evaluador: texto_(r.v[c2Eval]), fechaComite: fecha_(r.v[c2FCom]), acta: texto_(r.v[c2Acta])
     };
   }).filter(function (p) { return p.numero || p.correo; });
 
@@ -252,13 +283,13 @@ function auditarHojasCTTG_(hojas) {
     if (p.correo && !pertenece) {
       var suyas = radicacionesDeCorreo(p.correo, false).map(function (z) { return z.numero; });
       var prueba = esPrueba_(p.correo);
-      alerta(prueba || p.estado === 'aprobado' ? 'ALTA' : 'MEDIA',
+      alerta(prueba || esAprobado_(p.estado) ? 'ALTA' : 'MEDIA',
         prueba ? 'Protocolo de prueba sobre un radicado real' : 'Protocolo de alguien ajeno al radicado',
         'Fase2', p.fila, p.numero, p.correo,
         'La fila ' + p.fila + ' (' + (p.estadoCrudo || 'sin estado') + ') la envió ' + p.correo +
           ', que no es estudiante de ' + p.numero + ' (' + enF1[0].correos.join(', ') + ').' +
           (suyas.length ? ' Sus radicaciones: ' + suyas.join(', ') + '.' : '') +
-          (p.estado === 'aprobado' ? ' Como está "Aprobado", puede hacer que la plataforma crea que ese radicado ya fue avalado y lo oculte de la lista de pendientes.' : ''),
+          (esAprobado_(p.estado) ? ' Como está "Aprobado", puede hacer que la plataforma crea que ese radicado ya fue avalado y lo oculte de la lista de pendientes.' : ''),
         prueba
           ? 'Cambiar el número de radicado de esta fila por "PRUEBA-' + p.numero.replace(/^CTTG-/, '') + '" (no borrar la fila para no correr los números de fila).'
           : (suyas.length === 1
@@ -285,9 +316,9 @@ function auditarHojasCTTG_(hojas) {
     }
 
     // 9. Fase2 y Fase1 no coinciden
-    var ultimo = propios[propios.length - 1];
+    var ultimo = protocoloVigente_(propios);
     var r1 = enF1[0];
-    if (ultimo && ultimo.estado === 'aprobado' && ['aprobado', 'sustentado', 'completado', 'reprobado'].indexOf(r1.estado) < 0 && r1.activa) {
+    if (ultimo && esAprobado_(ultimo.estado) &&['aprobado', 'sustentado', 'completado', 'reprobado'].indexOf(r1.estado) < 0 && r1.activa) {
       alerta('MEDIA', 'Protocolo aprobado pero Fase1 no actualizada', 'Fase1', r1.fila, num, ultimo.correo,
         'En Fase2 (fila ' + ultimo.fila + ') el protocolo está "Aprobado", pero en Fase1 la radicación sigue en "' + r1.estadoCrudo.trim() + '".',
         'Actualizar el estado de Fase1 a "Aprobado" para que el estudiante pueda avanzar a Fase 3.');
@@ -299,13 +330,16 @@ function auditarHojasCTTG_(hojas) {
   var caMail = col_(actas, ['email estudiante']);
   var caArch = col_(actas, ['nombre archivo']);
   var caEst = col_(actas, ['estado']);
+  var caFecha = col_(actas, ['fecha carga']);
   var solicitudesAprobadasSinEfecto = {};
+  var listaActas = [];
   actas.filas.forEach(function (r) {
     var numero = texto_(r.v[caRad]);
     var correo = correo_(r.v[caMail]);
     var archivo = texto_(r.v[caArch]);
     var estado = norm_(r.v[caEst]);
     if (!correo && !numero) return;
+    listaActas.push({ fila: r.fila, numero: numero, correo: correo, archivo: archivo, estado: estado, fecha: fecha_(r.v[caFecha]) });
     var esSolicitudF2 = /fase 2/i.test(archivo) || estado === 'solicitud fase 2';
     var sinNumero = !numero || numero === '—' || numero === '-' || numero === '–';
     var suyas = correo ? radicacionesDeCorreo(correo, true) : [];
@@ -381,6 +415,215 @@ function auditarHojasCTTG_(hojas) {
     }
   });
 
+  // ═════════════════════════════════════════════════════════════════
+  // SEGUIMIENTO POR FASE: trámites detenidos y datos que impiden avanzar
+  // ═════════════════════════════════════════════════════════════════
+  function correoDelGrupo(rad, correo) { return rad.correos.indexOf(correo) >= 0; }
+  function protosPropios(rad) {
+    return (protosPorRad[rad.numero] || []).filter(function (p) { return correoDelGrupo(rad, p.correo); });
+  }
+  function actasDe(rad) {
+    return listaActas.filter(function (a) {
+      return correoDelGrupo(rad, a.correo) && (a.numero === rad.numero || !a.numero || /^[—–-]$/.test(a.numero));
+    });
+  }
+  var hoyTxt = fmt_(hoy);
+
+  rads.forEach(function (rad) {
+    if (!rad.activa || rad.correos.some(esPrueba_)) return;
+
+    // ── FASE 1: radicación y aval de tutores ─────────────────────────
+    if (['radicado', 'revision'].indexOf(rad.estado) >= 0 && rad.fechaRad) {
+      var limiteTut = sumarDiasHabiles_(rad.fechaRad, PLAZOS.respuestaTutoresDiasHabiles);
+      if (limiteTut < hoy) {
+        alerta('ALTA', 'Tutores sin avalar fuera de plazo', 'Fase1', rad.fila, rad.numero, rad.quien,
+          'Radicado el ' + fmt_(rad.fechaRad) + ' y sigue en "' + rad.estadoCrudo.trim() + '". El plazo de ' + PLAZOS.respuestaTutoresDiasHabiles +
+            ' días hábiles para avalar tutores venció el ' + fmt_(limiteTut) + ' (' + diasEntre_(limiteTut, hoy) + ' días de retraso).',
+          'Validar los tutores en "✅ Tutores" o devolver la radicación con el motivo.', '1. Radicación y tutores');
+      }
+    }
+    if (rad.estado !== 'radicado' && rad.estado !== 'revision' && rad.tutor1Email && !/@usc\.edu\.co$/.test(rad.tutor1Email)) {
+      alerta('BAJA', 'Tutor principal con correo no institucional', 'Fase1', rad.fila, rad.numero, rad.tutor1Email,
+        'El tutor 1 (' + rad.tutor1Email + ') no tiene correo @usc.edu.co. El reglamento exige que el tutor principal tenga vínculo con la USC.',
+        'Confirmar el vínculo laboral del tutor con la USC; si no lo tiene, pedir al grupo un tutor principal vinculado.', '1. Radicación y tutores');
+    }
+    if (!rad.titulo || /^(ninguno|n\/a|na|sin titulo|-)$/i.test(norm_(rad.titulo))) {
+      alerta('BAJA', 'Radicación sin título', 'Fase1', rad.fila, rad.numero, rad.quien,
+        'La radicación tiene como título "' + (rad.titulo || '(vacío)') + '".',
+        'Pedir al grupo el título del proyecto (solicitud de modificación) antes del comité.', '1. Radicación y tutores');
+    }
+    if (rad.celdasError.length) {
+      alerta('MEDIA', 'Celdas con error en la radicación', 'Fase1', rad.fila, rad.numero, rad.quien,
+        'Las columnas ' + rad.celdasError.join(', ') + ' muestran "#ERROR!". Suele pasar cuando un dato empieza por "+", "=" o "-" y la hoja lo toma como fórmula (p. ej. un teléfono "+57…").',
+        'Reescribir el dato en esas celdas anteponiendo un apóstrofo (\'), y corregir el formulario para guardar esos campos como texto.', '1. Radicación y tutores');
+    }
+
+    // ── ACTAS DE ASESORÍA ────────────────────────────────────────────
+    var misActas = actasDe(rad);
+    if (rad.estado === 'tutores avalados' && rad.fechaRad) {
+      var meses = rad.semestre >= 12 ? 3 : (rad.semestre >= 11 ? 6 : 12);
+      var limiteActas = sumarMeses_(rad.fechaRad, meses);
+      var aprobadas = misActas.filter(function (a) { return a.estado === 'aprobada' && !/fase 2/i.test(a.archivo); }).length;
+      if (limiteActas < hoy && !aprobadas) {
+        alerta('MEDIA', 'Plazo de actas vencido sin actas aprobadas', 'Fase1', rad.fila, rad.numero, rad.quien,
+          'Semestre ' + (rad.semestre || '?') + ': el plazo de ' + meses + ' meses para cargar actas venció el ' + fmt_(limiteActas) + ' y no hay actas aprobadas.',
+          'Contactar al grupo y al tutor para saber si continúan; si no, cancelar la radicación.', 'Actas de asesoría');
+      }
+    }
+
+    // ── FASE 2: protocolo y comité técnico ───────────────────────────
+    var propios = protosPropios(rad);
+    var ultimo = protocoloVigente_(propios);
+    // Envíos "Cargado" que quedaron sobrando después de avalar/aprobar otro envío
+    var sobrantes = ultimo ? propios.filter(function (p) { return p.fila > ultimo.fila && p.estado === 'cargado'; }) : [];
+    if (ultimo && ultimo.estado !== 'cargado' && sobrantes.length) {
+      alerta('BAJA', 'Envío de protocolo sobrante sin tramitar', 'Fase2', filas_(sobrantes), rad.numero, sobrantes[0].correo,
+        'El protocolo ya está "' + ultimo.estadoCrudo + '" (fila ' + ultimo.fila + '), pero después quedaron ' + sobrantes.length + ' envío(s) "Cargado" que siguen apareciendo como pendientes.',
+        'Si es el mismo documento, poner en esas filas Estado = "Devuelto" y Observación "Envío repetido". Si es una versión corregida, tramitarla.', '2. Protocolo y comité');
+    }
+    if (rad.estado === 'fase 2 desbloqueada' && !propios.length) {
+      var desde = ultimaFecha_(misActas.filter(function (a) { return /fase 2/i.test(a.archivo); }).map(function (a) { return a.fecha; }));
+      if (desde && diasEntre_(desde, hoy) > PLAZOS.cargaProtocoloDias) {
+        alerta('BAJA', 'Fase 2 desbloqueada sin protocolo', 'Fase1', rad.fila, rad.numero, rad.quien,
+          'La Fase 2 se desbloqueó hace ' + diasEntre_(desde, hoy) + ' días y el grupo no ha enviado el protocolo.',
+          'Recordar al grupo que debe cargar el protocolo por el formulario.', '2. Protocolo y comité');
+      }
+    }
+    if (ultimo && ultimo.estado === 'cargado') {
+      var espera = ultimo.fecha ? diasHabilesEntre_(ultimo.fecha, hoy) : 0;
+      if (espera > PLAZOS.avalProtocoloDiasHabiles) {
+        alerta('ALTA', 'Protocolo cargado sin avalar', 'Fase2', ultimo.fila, rad.numero, ultimo.correo,
+          'El protocolo se cargó el ' + fmt_(ultimo.fecha) + ' (' + espera + ' días hábiles) y no se ha avalado ni devuelto. En Fase1 la radicación está en "' + rad.estadoCrudo.trim() + '".',
+          'Avalar el protocolo (asignar evaluador y fecha de comité) o devolverlo. Si no aparece en la plataforma, revisar las alertas de filas de prueba o repetidas de este radicado.', '2. Protocolo y comité');
+      }
+    }
+    if (rad.estado === 'pendiente comite tecnico' && !propios.length) {
+      alerta('ALTA', 'Pendiente de comité sin protocolo', 'Fase1', rad.fila, rad.numero, rad.quien,
+        'La radicación está en "Pendiente Comité Técnico" pero no hay ningún protocolo del grupo en Fase2.',
+        'Verificar si el protocolo llegó con otro número de radicado o desde otro correo, y corregir la fila en Fase2.', '2. Protocolo y comité');
+    }
+    if (ultimo && ultimo.estado === 'pendiente comite') {
+      if (!ultimo.evaluador || !ultimo.fechaComite) {
+        alerta('MEDIA', 'Protocolo en comité sin evaluador o fecha', 'Fase2', ultimo.fila, rad.numero, ultimo.correo,
+          'El protocolo está "Pendiente Comité" pero le falta ' + [!ultimo.evaluador ? 'evaluador' : '', !ultimo.fechaComite ? 'fecha de comité' : ''].filter(String).join(' y ') + '.',
+          'Completar el evaluador y la fecha de comité para que se notifique al evaluador y al estudiante.', '2. Protocolo y comité');
+      } else if (ultimo.fechaComite < hoy) {
+        alerta('ALTA', 'Comité realizado sin decisión registrada', 'Fase2', ultimo.fila, rad.numero, ultimo.correo,
+          'El comité del ' + fmt_(ultimo.fechaComite) + ' ya pasó (' + diasEntre_(ultimo.fechaComite, hoy) + ' días) y el protocolo sigue "Pendiente Comité" (evaluador: ' + ultimo.evaluador + ').',
+          'Registrar la decisión del comité (Aprobado / Devuelto) con el número de acta, o reprogramar la fecha de comité.', '2. Protocolo y comité');
+      }
+    }
+    if (ultimo && esAprobado_(ultimo.estado) && !ultimo.acta && ultimo.estado !== 'aprobado directo') {
+      alerta('MEDIA', 'Protocolo aprobado sin número de acta', 'Fase2', ultimo.fila, rad.numero, ultimo.correo,
+        'El protocolo está "Aprobado" pero no tiene número de acta de comité.',
+        'Registrar el número de acta del comité en la fila del protocolo.', '2. Protocolo y comité');
+    }
+  });
+
+  // ── FASE 3: sustentación ───────────────────────────────────────────
+  var f3 = leerTabla_(hojas['Fase 3']);
+  if (f3.filas.length) {
+    var c3Rad = col_(f3, ['numero radicacion']);
+    var c3Mail = col_(f3, ['email estudiante']);
+    var c3FSus = col_(f3, ['fecha sustentacion']);
+    var c3FAsig = col_(f3, ['fecha asignada sustentacion']);
+    var c3Turn = col_(f3, ['% turnitin']);
+    var c3Nota = col_(f3, ['nota']);
+    var c3Est = col_(f3, ['estado solicitud']);
+    var c3Carga = col_(f3, ['fecha carga']);
+    var c3J1Ced = col_(f3, ['jurado 1 cedula']);
+    var c3J2Ced = col_(f3, ['jurado 2 cedula']);
+    var c3J1Nom = col_(f3, ['jurado 1 nombre']);
+    var c3J2Nom = col_(f3, ['jurado 2 nombre']);
+
+    // Encabezados repetidos: el código que busca columnas por nombre lee/escribe en la primera
+    var repetidos = f3.encabezado.filter(function (h, i) { return h && f3.encabezado.indexOf(h) !== i; });
+    if (repetidos.length) {
+      alerta('MEDIA', 'Columnas repetidas en la hoja Fase 3', 'Fase 3', 1, '', '',
+        'Estas columnas aparecen dos veces: ' + unicos_(repetidos).join(', ') + '. Si el Apps Script busca columnas por nombre, escribe en una y lee de la otra.',
+        'Revisar cuál de las dos tiene datos, mover los datos a una sola y borrar la columna sobrante (después de revisar el Apps Script).', '3. Sustentación');
+    }
+
+    var ultimaPorRad = {};
+    f3.filas.forEach(function (r) {
+      var num = texto_(r.v[c3Rad]);
+      if (!num) return;
+      // Se toma la última solicitud, salvo que una anterior ya tenga nota (trabajo cerrado).
+      if (ultimaPorRad[num] && ultimaPorRad[num].nota && !texto_(r.v[c3Nota])) return;
+      ultimaPorRad[num] = {
+        fila: r.fila, numero: num, correo: correo_(r.v[c3Mail]),
+        fechaSus: fecha_(r.v[c3FSus]) || fecha_(r.v[c3FAsig]),
+        turnitin: parseFloat(r.v[c3Turn]), nota: texto_(r.v[c3Nota]),
+        estadoCrudo: texto_(r.v[c3Est]), estado: norm_(r.v[c3Est]), carga: fecha_(r.v[c3Carga]),
+        jurados: [[texto_(r.v[c3J1Nom]), texto_(r.v[c3J1Ced])], [texto_(r.v[c3J2Nom]), texto_(r.v[c3J2Ced])]]
+      };
+    });
+
+    Object.keys(ultimaPorRad).forEach(function (num) {
+      var s = ultimaPorRad[num];
+      var rad = (porNumero[num] || [])[0];
+      if (!rad) {
+        alerta('BAJA', 'Solicitud de sustentación con radicado inexistente', 'Fase 3', s.fila, num, s.correo,
+          'La solicitud apunta a ' + num + ', que no existe en Fase1.', 'Si es una prueba, borrarla o marcarla; si no, corregir el número.', '3. Sustentación');
+        return;
+      }
+      if (rad.correos.some(esPrueba_) || !rad.activa && rad.estado !== 'sustentado') return;
+      var devuelta = /devuelta/.test(s.estado);
+
+      // Protocolo aprobado antes de pedir sustentación (diplomados no pasan por protocolo)
+      var aprobado = protosPropios(rad).some(function (p) { return esAprobado_(p.estado); });
+      if (!aprobado && !devuelta && !/diplomado/i.test(rad.modalidad)) {
+        alerta('ALTA', 'Sustentación sin protocolo aprobado', 'Fase 3', s.fila, num, s.correo,
+          'Hay una solicitud de sustentación ("' + (s.estadoCrudo || 'sin estado') + '") pero no hay protocolo "Aprobado" del grupo en Fase2.',
+          'Verificar la aprobación del protocolo antes de programar la sustentación.', '3. Sustentación');
+      }
+      if (!devuelta && s.turnitin >= PLAZOS.turnitinMaximo) {
+        alerta('MEDIA', 'Turnitin por encima del máximo', 'Fase 3', s.fila, num, s.correo,
+          'La similitud Turnitin es ' + s.turnitin + '% (máximo ' + PLAZOS.turnitinMaximo + '%) y la solicitud no está devuelta.',
+          'Devolver la solicitud para que el grupo reduzca la similitud.', '3. Sustentación');
+      }
+      if (!devuelta && !s.nota) {
+        var malos = s.jurados.filter(function (j) { return j[0] && !cedulaValida_(j[1]); });
+        if (malos.length) {
+          alerta('MEDIA', 'Jurado sin cédula válida', 'Fase 3', s.fila, num, s.correo,
+            malos.map(function (j) { return j[0] + ': "' + (j[1] || 'vacío') + '"'; }).join('; ') +
+              '. Son valores de relleno (30000000) o números de celular en la columna de cédula.',
+            'Pedir la cédula real de los jurados; revisar el formulario de Fase 3, que parece guardar el teléfono en la columna de cédula.', '3. Sustentación');
+        }
+      }
+      if (s.fechaSus && s.fechaSus < hoy && !s.nota && !devuelta) {
+        alerta('ALTA', 'Sustentación realizada sin nota registrada', 'Fase 3', s.fila, num, s.correo,
+          'La sustentación era el ' + fmt_(s.fechaSus) + ' (hace ' + diasEntre_(s.fechaSus, hoy) + ' días) y no tiene nota. Fase1 está en "' + rad.estadoCrudo.trim() + '".',
+          'Registrar el resultado (nota, acta, producto) en "🎓 Registrar" para cerrar el trabajo.', '3. Sustentación');
+      }
+      if (!s.fechaSus && /jurados aprobados/.test(s.estado) && s.carga && diasEntre_(s.carga, hoy) > PLAZOS.programarSustentacionDias) {
+        alerta('MEDIA', 'Jurados aprobados sin fecha de sustentación', 'Fase 3', s.fila, num, s.correo,
+          'Los jurados están aprobados desde hace más de ' + PLAZOS.programarSustentacionDias + ' días (solicitud del ' + fmt_(s.carga) + ') y no hay fecha de sustentación.',
+          'Contactar al grupo para que informe la fecha acordada con los jurados, y programarla.', '3. Sustentación');
+      }
+      if (s.nota && rad.estado !== 'sustentado' && rad.estado !== 'reprobado') {
+        alerta('MEDIA', 'Nota registrada pero radicación no cerrada', 'Fase1', rad.fila, num, s.correo,
+          'La sustentación tiene nota ' + s.nota + ' (Fase 3, fila ' + s.fila + '), pero Fase1 sigue en "' + rad.estadoCrudo.trim() + '".',
+          'Cambiar el estado de Fase1 a "Sustentado" (o "Reprobado").', '3. Sustentación');
+      }
+    });
+  }
+
+  // ── Comités programados ────────────────────────────────────────────
+  var reuniones = leerTabla_(hojas['Fecha reuniones']);
+  if (reuniones.filas.length) {
+    var cr1 = col_(reuniones, ['fecha reunion 1']), cr2 = col_(reuniones, ['fecha reunion 2']);
+    var fechasComite = [];
+    reuniones.filas.forEach(function (r) {
+      [fecha_(r.v[cr1]), fecha_(r.v[cr2])].forEach(function (f) { if (f) fechasComite.push(f.getTime()); });
+    });
+    if (!fechasComite.some(function (t) { return t >= hoy.getTime(); })) {
+      alerta('MEDIA', 'No hay próximos comités programados', 'Fecha reuniones', '', '', '',
+        'Todas las fechas de comité de la hoja "Fecha reuniones" ya pasaron (hoy ' + hoyTxt + ').',
+        'Agregar las próximas fechas de comité para poder avalar protocolos.', '2. Protocolo y comité');
+    }
+  }
+
   // ── Usuarios ───────────────────────────────────────────────────────
   var cuMail = col_(usuarios, ['email']);
   var porCorreo = {};
@@ -397,7 +640,9 @@ function auditarHojasCTTG_(hojas) {
   });
 
   var orden = { ALTA: 0, MEDIA: 1, BAJA: 2 };
-  alertas.sort(function (p, q) { return orden[p.severidad] - orden[q.severidad]; });
+  alertas.sort(function (p, q) {
+    return (orden[p.severidad] - orden[q.severidad]) || (p.fase < q.fase ? -1 : p.fase > q.fase ? 1 : 0);
+  });
   return alertas;
 }
 
@@ -407,21 +652,27 @@ function auditarHojasCTTG_(hojas) {
 
 function escribirAlertas_(ss, alertas) {
   var sh = ss.getSheetByName(AUDITORIA_HOJA_SALIDA) || ss.insertSheet(AUDITORIA_HOJA_SALIDA);
-  var encabezado = ['Clave', 'Prioridad', 'Tipo', 'Hoja', 'Fila(s)', 'Radicado', 'Correo',
+  var encabezado = ['Clave', 'Prioridad', 'Fase', 'Tipo', 'Hoja', 'Fila(s)', 'Radicado', 'Correo',
                     'Qué pasa', 'Qué hacer', 'Gestión', 'Notas de gestión', 'Detectado el'];
+  var iGestion = encabezado.indexOf('Gestión');
 
-  // Conservar lo que la coordinadora haya escrito en Gestión / Notas / fecha
+  // Conservar lo que la coordinadora haya escrito en Gestión / Notas / fecha.
+  // Se lee por nombre de columna para no perderlo si cambia el orden de columnas.
   var previo = {};
   if (sh.getLastRow() > 1) {
-    var viejos = sh.getRange(2, 1, sh.getLastRow() - 1, encabezado.length).getValues();
-    viejos.forEach(function (v) { if (v[0]) previo[v[0]] = { gestion: v[9], notas: v[10], desde: v[11] }; });
+    var todo = sh.getRange(1, 1, sh.getLastRow(), Math.max(sh.getLastColumn ? sh.getLastColumn() : encabezado.length, 1)).getValues();
+    var h = todo[0].map(String);
+    var iC = h.indexOf('Clave'), iG = h.indexOf('Gestión'), iN = h.indexOf('Notas de gestión'), iD = h.indexOf('Detectado el');
+    if (iC >= 0) todo.slice(1).forEach(function (v) {
+      if (v[iC]) previo[v[iC]] = { gestion: iG >= 0 ? v[iG] : '', notas: iN >= 0 ? v[iN] : '', desde: iD >= 0 ? v[iD] : '' };
+    });
   }
 
   var hoy = new Date();
   var filas = alertas.map(function (a) {
     var clave = claveAlerta_(a);
     var p = previo[clave] || {};
-    return [clave, a.severidad, a.tipo, a.hoja, String(a.fila), a.radicado, a.correo,
+    return [clave, a.severidad, a.fase, a.tipo, a.hoja, String(a.fila), a.radicado, a.correo,
             a.detalle, a.accion, p.gestion || 'Pendiente', p.notas || '', p.desde || hoy];
   });
 
@@ -437,13 +688,23 @@ function escribirAlertas_(ss, alertas) {
     sh.getRange(2, 1, filas.length, encabezado.length).setBackgrounds(fondos).setWrap(true).setVerticalAlignment('top');
     var regla = SpreadsheetApp.newDataValidation()
       .requireValueInList(['Pendiente', 'En proceso', 'Resuelto', 'Ignorar'], true).build();
-    sh.getRange(2, 10, filas.length, 1).setDataValidation(regla);
+    sh.getRange(2, iGestion + 1, filas.length, 1).setDataValidation(regla);
   } else {
     sh.getRange(2, 1).setValue('Sin alertas: no se encontraron duplicados ni inconsistencias.');
   }
   sh.setFrozenRows(1);
   sh.hideColumns(1);
-  [110, 70, 230, 110, 70, 150, 220, 420, 420, 100, 220, 100].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+  [110, 70, 150, 230, 110, 70, 150, 220, 420, 420, 100, 220, 100].forEach(function (w, i) { sh.setColumnWidth(i + 1, w); });
+}
+
+/** Fase del proceso a la que pertenece una alerta, según la hoja y el tipo. */
+function faseDe_(hoja, tipo) {
+  if (/fase 2|protocolo|comite|comité/i.test(tipo)) return '2. Protocolo y comité';
+  if (hoja === 'Fase 3' || /sustentaci/i.test(tipo)) return '3. Sustentación';
+  if (hoja === 'Acta asesoria') return 'Actas de asesoría';
+  if (hoja === 'Fase2') return '2. Protocolo y comité';
+  if (hoja === 'Usuarios') return 'General';
+  return '1. Radicación y tutores';
 }
 
 function claveAlerta_(a) {
@@ -456,7 +717,8 @@ function claveAlerta_(a) {
 
 /** Convierte los valores de una hoja en { encabezado:[...normalizado], filas:[{fila, v}] } */
 function leerTabla_(valores) {
-  if (!valores || !valores.length) return { encabezado: [], filas: [] };
+  if (!valores || !valores.length) return { encabezado: [], encabezadoOriginal: [], filas: [] };
+  var encabezadoOriginal = valores[0].map(function (h) { return texto_(h); });
   var encabezado = valores[0].map(function (h) { return norm_(h); });
   var filas = [];
   for (var i = 1; i < valores.length; i++) {
@@ -464,7 +726,7 @@ function leerTabla_(valores) {
     if (v.every(function (c) { return c === '' || c === null || c === undefined; })) continue;
     filas.push({ fila: i + 1, v: v });
   }
-  return { encabezado: encabezado, filas: filas };
+  return { encabezado: encabezado, encabezadoOriginal: encabezadoOriginal, filas: filas };
 }
 
 /** Índice de la primera columna cuyo encabezado es (o empieza por) alguno de los nombres */
@@ -501,6 +763,66 @@ function interseccion_(a, b) { return a.filter(function (x) { return b.indexOf(x
 function unicos_(a) { return a.filter(function (x, i) { return a.indexOf(x) === i; }); }
 function filas_(lista) { return lista.map(function (x) { return x.fila; }).join(', '); }
 function corto_(s) { s = texto_(s); return s.length > 50 ? s.substring(0, 50) + '…' : s; }
+
+/** "Aprobado" y "Aprobado Directo" (la hoja usa ambos). */
+function esAprobado_(estadoNorm) { return /^aprobado/.test(estadoNorm); }
+
+/**
+ * Protocolo que define el estado real del grupo en Fase 2. Si ya hay uno avalado
+ * ("Pendiente Comité") o aprobado y después solo llegaron envíos "Cargado", esos
+ * envíos son sobrantes y no cambian el estado. Si después hubo una devolución,
+ * manda el último envío.
+ */
+function protocoloVigente_(lista) {
+  if (!lista.length) return null;
+  var aprobados = lista.filter(function (p) { return esAprobado_(p.estado); });
+  if (aprobados.length) return aprobados[aprobados.length - 1];
+  var iAv = -1, iDev = -1;
+  lista.forEach(function (p, i) {
+    if (p.estado === 'pendiente comite') iAv = i;
+    if (/^devuelto/.test(p.estado)) iDev = i;
+  });
+  return iAv >= 0 && iAv > iDev ? lista[iAv] : lista[lista.length - 1];
+}
+
+/** Cédula plausible: 6 a 10 dígitos, que no sea relleno (30000000, 11111111…) ni un celular (3xx xxx xxxx). */
+function cedulaValida_(s) {
+  var d = texto_(s).replace(/\.0+$/, '').replace(/\D/g, '');
+  if (d.length < 6 || d.length > 10) return false;
+  if (/^(\d)\1+$/.test(d) || /^[1-9]0{6,}$/.test(d)) return false;
+  if (d.length === 10 && d.charAt(0) === '3') return false;
+  return true;
+}
+
+// ── Fechas (sin hora, en la zona de la hoja) ─────────────────────────
+function soloFecha_(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+function fecha_(v) {
+  if (v === null || v === undefined || v === '') return null;
+  if (Object.prototype.toString.call(v) === '[object Date]') return isNaN(v.getTime()) ? null : soloFecha_(v);
+  var m = String(v).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  m = String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return new Date(+m[3], +m[2] - 1, +m[1]);
+  return null;
+}
+function fmt_(d) {
+  return d ? ('0' + d.getDate()).slice(-2) + '/' + ('0' + (d.getMonth() + 1)).slice(-2) + '/' + d.getFullYear() : '';
+}
+function diasEntre_(a, b) { return Math.round((soloFecha_(b) - soloFecha_(a)) / 86400000); }
+function sumarDiasHabiles_(d, n) {
+  var r = soloFecha_(d), sumados = 0;
+  while (sumados < n) { r.setDate(r.getDate() + 1); if (r.getDay() !== 0 && r.getDay() !== 6) sumados++; }
+  return r;
+}
+function diasHabilesEntre_(a, b) {
+  var r = soloFecha_(a), fin = soloFecha_(b), n = 0;
+  while (r < fin) { r.setDate(r.getDate() + 1); if (r.getDay() !== 0 && r.getDay() !== 6) n++; }
+  return n;
+}
+function sumarMeses_(d, n) { var r = soloFecha_(d); r.setMonth(r.getMonth() + n); return r; }
+function ultimaFecha_(lista) {
+  return lista.filter(Boolean).sort(function (a, b) { return b - a; })[0] || null;
+}
 
 // Permite probar la lógica fuera de Apps Script (Node). No afecta a Apps Script.
 if (typeof module !== 'undefined') module.exports = { auditarHojasCTTG_: auditarHojasCTTG_ };
