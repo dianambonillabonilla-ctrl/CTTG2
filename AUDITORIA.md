@@ -139,6 +139,13 @@ Resultado sobre la hoja del 28-sep-2026: 34 alertas, 7 de prioridad ALTA.
 - En Actas: aviso cuando un acta o solicitud de Fase 2 **no tiene radicado** (sugiere cuál es) o tiene el de otro grupo; también dentro del modal "Solicitud de Fase 2".
 - Los botones ya no incrustan textos del estudiante en el `onclick` (un apóstrofo en el nombre del archivo rompía el botón).
 
+- Por defecto la tabla de radicaciones muestra **solo las que están en trámite**; las
+  terminadas y canceladas (Sustentado, Completado, Devuelto, Cancelado, Reprobado) quedan en
+  "📁 Ver terminadas y canceladas", que solo se dibuja al abrirlo y respeta la búsqueda.
+  Lo mismo en "Mis radicaciones" del estudiante ("Ver radicaciones anteriores").
+  Nota: el Apps Script sigue enviando todas las filas; para que además se descargue menos,
+  `getFase1` debería aceptar un parámetro para devolver solo las activas.
+
 ### 3. Protocolos (`protocolo_coordinadora.html`)
 - Avisos de **envío repetido** (indica cuál es la fila más reciente) y de **otro protocolo "Aprobado" con el mismo número enviado por otra persona**.
 - Corregido el XSS: todos los datos se escapan.

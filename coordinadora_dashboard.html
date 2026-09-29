@@ -127,6 +127,7 @@
     <div class="filters">
       <input id="search" placeholder="🔍 Buscar por nombre, número, título..." oninput="renderTabla()">
       <select id="fEst" onchange="renderTabla()">
+        <option value="__activas" selected>En trámite (activas)</option>
         <option value="">Todos los estados</option>
         <option value="Radicado">Radicado</option>
         <option value="Revisión">En Revisión</option>
@@ -150,6 +151,19 @@
         <tbody id="tbody">
           <tr><td colspan="8" class="empty"><span class="spinner"></span>Cargando registros...</td></tr>
         </tbody>
+      </table>
+    </div>
+
+    <!-- Historial: terminadas y canceladas. Solo se dibuja al abrirlo. -->
+    <button class="btn" id="btnHistRad" style="margin:14px 0 10px;padding:8px 14px" onclick="toggleHistorialRad()">
+      📁 Ver terminadas y canceladas (<span id="histRadCount">0</span>) ▾
+    </button>
+    <div class="tbl-wrap" id="histRadWrap" style="display:none">
+      <table>
+        <thead><tr>
+          <th>N° Radicación</th><th>Estudiante(s)</th><th>Título</th><th>Modalidad</th><th>Tutor(es)</th><th>F. Radicación</th><th>Estado</th><th>Acciones</th>
+        </tr></thead>
+        <tbody id="tbodyHistRad"></tbody>
       </table>
     </div>
   </div>
@@ -432,20 +446,49 @@ function avisoDuplicada(r) {
   return `<div class="dup-aviso" title="El mismo grupo tiene otra radicación activa. Confirme cuál sigue vigente y cambie la otra a Cancelado.">⚠️ Duplicada con ${esc(otras)}</div>`;
 }
 
-function renderTabla() {
+// Coincidencia por texto y modalidad (común a la tabla principal y al historial).
+function pasaBusqueda(r) {
   const q  = (document.getElementById('search').value || '').toLowerCase();
-  const fE = document.getElementById('fEst').value;
   const fM = document.getElementById('fMod').value;
+  const txt = [r.numero,r.nombre1,r.nombre2,r.nombre3,r.titulo,r.emailEstudiante,r.tutor1Nombre].join(' ').toLowerCase();
+  return (!q || txt.includes(q)) && (!fM || r.modalidad === fM);
+}
+
+// Por defecto solo se dibujan las radicaciones en trámite; las terminadas y canceladas
+// quedan en el historial plegado para no cargar la tabla con registros cerrados.
+function renderTabla() {
+  const fE = document.getElementById('fEst').value;
   const filtered = radicaciones.filter(r => {
-    const txt = [r.numero,r.nombre1,r.nombre2,r.nombre3,r.titulo,r.emailEstudiante,r.tutor1Nombre].join(' ').toLowerCase();
-    const pasaEstado = !fE || (fE === '__duplicadas' ? r.duplicadaCon.length > 0 : r.estado === fE);
-    return (!q || txt.includes(q)) && pasaEstado && (!fM || r.modalidad === fM);
+    const pasaEstado = fE === '__activas' ? esActiva(r)
+      : !fE || (fE === '__duplicadas' ? r.duplicadaCon.length > 0 : r.estado === fE);
+    return pasaEstado && pasaBusqueda(r);
   });
   const body = document.getElementById('tbody');
-  if (!filtered.length) { body.innerHTML = '<tr><td colspan="8" class="empty">Sin radicaciones que coincidan.</td></tr>'; return; }
-  body.innerHTML = filtered.map(r => {
-    const nombres = [r.nombre1,r.nombre2,r.nombre3].filter(Boolean).join('<br>') || '—';
-    const tutores = [r.tutor1Nombre,r.tutor2Nombre].filter(Boolean).join('<br>') || '—';
+  body.innerHTML = filtered.length
+    ? filtered.map(filaRadicacion).join('')
+    : `<tr><td colspan="8" class="empty">${fE === '__activas' ? 'No hay radicaciones en trámite que coincidan. Revise el historial de terminadas y canceladas.' : 'Sin radicaciones que coincidan.'}</td></tr>`;
+  renderHistorialRad();
+}
+
+function renderHistorialRad() {
+  const cerradas = radicaciones.filter(r => !esActiva(r) && pasaBusqueda(r));
+  document.getElementById('histRadCount').textContent = cerradas.length;
+  const wrap = document.getElementById('histRadWrap');
+  if (wrap.style.display === 'none') { document.getElementById('tbodyHistRad').innerHTML = ''; return; }
+  document.getElementById('tbodyHistRad').innerHTML = cerradas.length
+    ? cerradas.map(filaRadicacion).join('')
+    : '<tr><td colspan="8" class="empty">Sin radicaciones terminadas o canceladas que coincidan.</td></tr>';
+}
+
+function toggleHistorialRad() {
+  const wrap = document.getElementById('histRadWrap');
+  wrap.style.display = wrap.style.display === 'none' ? 'block' : 'none';
+  renderHistorialRad();
+}
+
+function filaRadicacion(r) {
+    const nombres = [r.nombre1,r.nombre2,r.nombre3].filter(Boolean).map(esc).join('<br>') || '—';
+    const tutores = [r.tutor1Nombre,r.tutor2Nombre].filter(Boolean).map(esc).join('<br>') || '—';
     const estado  = r.estado || 'Radicado';
     return `<tr>
       <td><div class="num-rad">${esc(r.numero||'')}</div>${avisoDuplicada(r)}</td>
@@ -461,7 +504,6 @@ function renderTabla() {
         <button class="btn gr" onclick="window.location.href='coordinadora_validar_tutores.html?row=${r.rowIndex}'">✅ Tutores</button>
       </div></td>
     </tr>`;
-  }).join('');
 }
 
 function abrirModalEst(ri, numero, estadoActual) {
