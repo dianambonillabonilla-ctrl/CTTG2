@@ -120,17 +120,48 @@ document.addEventListener('DOMContentLoaded', function() {
   cargarRadicacion();
 });
 
-function cargarRadicacion() {
+const lower = s => String(s || '').trim().toLowerCase();
+function esc(s) { return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// Radicación vigente: la más reciente que no esté cancelada, devuelta ni cerrada
+// (antes se tomaba la primera de la lista, que podía ser una cancelada o duplicada).
+function radicacionVigente(lista) {
+  const cerradas = ['cancelado','devuelto','reprobado','sustentado','completado'];
+  return lista.filter(r => !cerradas.includes(lower(r.estado)))
+    .sort((a, b) => String(b.fechaRadicacion || '').localeCompare(String(a.fechaRadicacion || '')))[0] || null;
+}
+
+async function cargarRadicacion() {
   const user = JSON.parse(localStorage.getItem('cttg_user') || '{}');
-  fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getFase1ByEmail', email: user.email }) })
-    .then(r => r.json())
-    .then(data => {
-      if (data.success && data.radicaciones.length > 0) {
-        document.getElementById('numeroRadicacion').value = data.radicaciones[0].numero;
-      } else {
-        mostrarError('No se encontró radicación. Debes radicar un proyecto primero.');
-      }
-    }).catch(e => console.error(e));
+  try {
+    const data = await (await fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getFase1ByEmail', email: user.email }) })).json();
+    const vigente = data.success ? radicacionVigente(data.radicaciones || []) : null;
+    if (!vigente) { bloquear('No tienes una radicación activa. Debes radicar un proyecto primero.'); return; }
+    document.getElementById('numeroRadicacion').value = vigente.numero;
+    if (['radicado','revisión','revision'].includes(lower(vigente.estado))) {
+      bloquear('Tu radicación ' + vigente.numero + ' aún no tiene la Fase 2 habilitada (estado: ' + vigente.estado + ').');
+      return;
+    }
+    // Evitar envíos repetidos: si ya hay un protocolo del grupo en trámite, no se envía otro.
+    const grupo = [vigente.emailEstudiante, vigente.email1, vigente.email2, vigente.email3, user.email].map(lower);
+    const f2 = await (await fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getFase2' }) })).json();
+    const delGrupo = (f2.protocolos || []).filter(p => lower(p.numero) === lower(vigente.numero) && grupo.includes(lower(p.emailEstudiante)));
+    // Estado real: un envío "Cargado" posterior a uno ya avalado o aprobado no lo reemplaza.
+    const avanzado = [...delGrupo].reverse().find(p => /^(aprobado|pendiente comit)/.test(lower(p.estado)));
+    const ultimaDevolucion = delGrupo.reduce((idx, p, i) => /^devuelto/.test(lower(p.estado)) ? i : idx, -1);
+    const ultimo = avanzado && delGrupo.indexOf(avanzado) > ultimaDevolucion ? avanzado : delGrupo[delGrupo.length - 1];
+    if (ultimo && /^aprobado/.test(lower(ultimo.estado))) {
+      bloquear('Tu protocolo ya fue aprobado. Continúa con la Fase 3 desde tu panel.');
+    } else if (ultimo && !/^devuelto/.test(lower(ultimo.estado))) {
+      bloquear('Tu grupo ya envió el protocolo (estado: ' + (ultimo.estado || 'Cargado') + '). Espera la respuesta de coordinación antes de enviarlo de nuevo.');
+    }
+  } catch (e) { console.error(e); }
+}
+
+function bloquear(msg) {
+  mostrarError(msg);
+  document.getElementById('btnSubmit').disabled = true;
+  document.getElementById('fileInput').disabled = true;
 }
 
 function mostrarError(msg) {
@@ -153,7 +184,7 @@ function subirArchivo() {
   driveUrl = null;
   nombreArchivo = file.name;
   document.getElementById('btnSubmit').disabled = true;
-  setStatus('uploading', '<span style="display:inline-block;width:12px;height:12px;border:2px solid rgba(165,180,252,.3);border-top-color:#a5b4fc;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px"></span>Subiendo <strong>' + file.name + '</strong> a Drive...');
+  setStatus('uploading', '<span style="display:inline-block;width:12px;height:12px;border:2px solid rgba(165,180,252,.3);border-top-color:#a5b4fc;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:8px"></span>Subiendo <strong>' + esc(file.name) + '</strong> a Drive...');
 
   const reader = new FileReader();
   reader.onload = function(e) {
@@ -168,7 +199,7 @@ function subirArchivo() {
     .then(data => {
       if (data.success) {
         driveUrl = data.url;
-        setStatus('done', '✅ <strong>' + file.name + '</strong> subido · <a href="' + data.url + '" target="_blank" style="color:#6ee7b7">Ver en Drive ↗</a>');
+        setStatus('done', '✅ <strong>' + esc(file.name) + '</strong> subido · <a href="' + esc(data.url) + '" target="_blank" rel="noopener" style="color:#6ee7b7">Ver en Drive ↗</a>');
         document.getElementById('btnSubmit').disabled = false;
       } else {
         setStatus('error', '❌ Error al subir: ' + (data.error || 'Intenta de nuevo'));

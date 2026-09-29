@@ -159,6 +159,43 @@ Resultado sobre la hoja del 28-sep-2026: 34 alertas, 7 de prioridad ALTA.
 ### 5. Fase 3 (`coordinadora_fase3.html`)
 - Corregido el XSS del botón "Asignar".
 
+## Seguimiento por fase (revisión del 29-sep-2026)
+
+`AuditoriaDatos.gs` ahora también sigue cada trámite por fase y marca los que están
+detenidos o con datos que impiden avanzar. Cada alerta indica su **Fase**. Los plazos
+se ajustan en `PLAZOS` al inicio del archivo. Resultado sobre la hoja: 92 alertas, 20 ALTA.
+
+| Fase | Qué se vigila | Hallazgos reales |
+|---|---|---|
+| 1. Radicación y tutores | Tutores sin avalar después de 15 días hábiles; tutor principal sin correo @usc.edu.co; radicación sin título; celdas `#ERROR!` | 14 tutores principales con Gmail/Hotmail; 3 radicaciones con título "Ninguno"; teléfonos que la hoja convirtió en `#ERROR!` (0030, 0059) |
+| Actas | Actas sin revisar; plazo de actas vencido sin actas aprobadas | — |
+| 2. Protocolo y comité | Protocolo "Cargado" sin avalar más de 5 días hábiles; comité ya realizado sin decisión; "Pendiente Comité" sin evaluador/fecha; aprobado sin acta; envíos sobrantes; que haya próximos comités | **4 protocolos con comité ya realizado (10 y 17 sep) sin decisión** (0002, 0014, 0052, 0055); 5 envíos "Cargado" sobrantes después de avalar; 0007 aprobado en Fase2 pero Fase1 sigue "Pendiente Comité Técnico" |
+| 3. Sustentación | Solicitud sin protocolo aprobado; Turnitin ≥ 20 %; jurados sin cédula válida; sustentación pasada sin nota; jurados aprobados sin fecha; nota registrada sin cerrar Fase1; columnas repetidas | **9 sustentaciones de mayo–junio sin nota registrada**; 14 solicitudes con "cédula" de jurado que es un celular o 30000000; 4 con jurados aprobados y sin fecha desde mayo; la hoja "Fase 3" tiene 3 columnas repetidas |
+
+### Errores de la plataforma encontrados al seguir las fases (corregidos en este repositorio)
+
+- **"Aprobado Directo" no se reconocía como aprobado.** La hoja usa "Aprobado Directo" y
+  "Devuelto por Comité Técnico", pero la plataforma solo aceptaba "Aprobado"/"Devuelto": al
+  estudiante con "Aprobado Directo" **no se le habilitaba la Fase 3**, y en Protocolos esos
+  registros aparecían como pendientes. Ahora se reconocen por el inicio del texto.
+- **Formulario de protocolo (Fase 2) y de sustentación (Fase 3) usaban la primera radicación
+  de la lista**, que podía ser una cancelada o duplicada: el envío quedaba con el número
+  equivocado. Ahora usan la radicación vigente.
+- **El protocolo se podía enviar varias veces** (origen de los "Cargado" repetidos). Ahora el
+  formulario se bloquea si el grupo ya tiene un protocolo en trámite o aprobado, o si la
+  Fase 2 no está habilitada.
+- **La solicitud de sustentación no verificaba que el protocolo estuviera aprobado** ni si ya
+  había otra solicitud en trámite (0030 tiene 3). Ahora lo verifica (los diplomados no pasan
+  por protocolo).
+- Nombre de archivo sin escapar en el formulario de protocolo.
+
+### A revisar en el formulario / Apps Script de Fase 3
+- Las columnas "Jurado 1/2 Cédula" reciben números de celular: el formulario parece guardar el
+  teléfono en la columna de cédula.
+- Columnas repetidas en "Fase 3" (J2 Especialidad, J1/J2 Aceptó ser jurado).
+- Casi ninguna sustentación tiene resultado registrado en la plataforma (solo 2
+  `RESULTADO_FINAL` en el historial): confirmar si las notas se registran por otro medio.
+
 ## Pendiente — en el Apps Script (no está en este repositorio)
 1. `getFase2`/aval de protocolo: buscar por número de radicado **y** correo de un integrante, y tomar el envío más reciente; ignorar filas de otros correos.
 2. Al crear la solicitud de Fase 2 guardar siempre el número de radicado; si el estudiante tiene varias activas, pedirle que elija.

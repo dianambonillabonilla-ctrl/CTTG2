@@ -86,6 +86,7 @@
 <main>
   <a href="estudiante_dashboard.html" class="back">← Volver al dashboard</a>
   <div class="phase-badge">🎓 FASE 3 — SUSTENTACIÓN</div>
+  <div id="avisoBloqueo" style="display:none;background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#fca5a5;border-radius:10px;padding:12px 14px;font-size:13px;margin-bottom:14px"></div>
 
   <!-- SECCIÓN 1: INFORMACIÓN -->
   <div class="form-card">
@@ -246,14 +247,43 @@ function toast(msg, type) {
   setTimeout(() => t.classList.remove('show'), 3500);
 }
 
+const lower = s => String(s || '').trim().toLowerCase();
+
+// Radicación vigente (no la primera de la lista, que podía ser una cancelada) y
+// verificación de que el grupo puede pedir sustentación: protocolo aprobado
+// (salvo diplomado) y sin otra solicitud en trámite.
 async function cargarNumeroRad() {
   try {
-    const res = await fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getFase1ByEmail', email: user.email }) });
-    const d = await res.json();
-    if (d.success && d.radicaciones.length > 0) {
-      document.getElementById('numeroRad').value = d.radicaciones[0].numero;
+    const d = await (await fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getFase1ByEmail', email: user.email }) })).json();
+    const cerradas = ['cancelado','devuelto','reprobado','sustentado','completado'];
+    const vigente = (d.radicaciones || []).filter(r => !cerradas.includes(lower(r.estado)))
+      .sort((a, b) => String(b.fechaRadicacion || '').localeCompare(String(a.fechaRadicacion || '')))[0];
+    if (!vigente) { bloquearSolicitud('No tienes una radicación activa.'); return; }
+    document.getElementById('numeroRad').value = vigente.numero;
+    const grupo = [vigente.emailEstudiante, vigente.email1, vigente.email2, vigente.email3, user.email].map(lower);
+
+    if (!/diplomado/i.test(vigente.modalidad || '')) {
+      const f2 = await (await fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getFase2' }) })).json();
+      const aprobado = (f2.protocolos || []).some(p => lower(p.numero) === lower(vigente.numero) && grupo.includes(lower(p.emailEstudiante)) && /^aprobado/.test(lower(p.estado)));
+      if (!aprobado) { bloquearSolicitud('Tu protocolo aún no está aprobado por el comité técnico. Podrás solicitar la sustentación cuando lo esté.'); return; }
     }
+    const f3 = await (await fetch(URL_APP, { method: 'POST', body: JSON.stringify({ action: 'getFase3' }) })).json();
+    // Solo se bloquea si el servidor informa el estado de la solicitud; sin ese dato
+    // no se puede distinguir una devuelta (que sí puede reenviarse) de una en trámite.
+    const enTramite = (f3.fase3 || []).some(s => {
+      const est = s.estadoSolicitud !== undefined ? s.estadoSolicitud : s.estado;
+      return est !== undefined && lower(s.numero) === lower(vigente.numero) && !s.nota && !/devuelta/.test(lower(est));
+    });
+    if (enTramite) bloquearSolicitud('Tu grupo ya tiene una solicitud de sustentación en trámite. Espera la respuesta de coordinación.');
   } catch(e) {}
+}
+
+function bloquearSolicitud(msg) {
+  toast(msg, 'warn');
+  const aviso = document.getElementById('avisoBloqueo');
+  if (aviso) { aviso.textContent = '🚫 ' + msg; aviso.style.display = 'block'; }
+  const btn = document.getElementById('btnEnviar');
+  if (btn) btn.disabled = true;
 }
 
 function checkS12() {

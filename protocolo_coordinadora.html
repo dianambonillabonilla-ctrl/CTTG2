@@ -169,7 +169,9 @@ const URL_APP = "https://script.google.com/macros/s/AKfycbxThWOEZZWmJTZ9SsAdEOE7
 let protocoloActual = null;
 let protocolosData = [];
 let historialRenderizado = false;
-const ESTADOS_TRAMITADOS = ['Aprobado', 'Devuelto'];
+// La hoja también usa "Aprobado Directo" y "Devuelto por Comité Técnico": se reconocen por el inicio.
+const ESTADOS_TRAMITADOS = { includes: est => /^(aprobado|devuelto)/i.test(String(est || '').trim()) };
+const esAprobado = est => /^aprobado/i.test(String(est || '').trim());
 
 document.addEventListener('DOMContentLoaded', function() {
   const user = JSON.parse(localStorage.getItem('cttg_admin') || '{}');
@@ -223,7 +225,7 @@ function avisosProtocolo(p) {
         : `Envío repetido (hay ${repetidos.length}). Tramite solo la fila más reciente.`);
     }
   }
-  const ajenosAprobados = mismoNumero.filter(x => x !== p && x.estado === 'Aprobado' && lower(x.emailEstudiante) !== lower(p.emailEstudiante));
+  const ajenosAprobados = mismoNumero.filter(x => x !== p && esAprobado(x.estado) && lower(x.emailEstudiante) !== lower(p.emailEstudiante));
   if (ajenosAprobados.length) {
     avisos.push(`Hay otro protocolo "Aprobado" con este número enviado por ${ajenosAprobados.map(x => x.emailEstudiante).join(', ')}. Si es un registro de prueba, cambie su número en la hoja Fase2.`);
   }
@@ -232,12 +234,14 @@ function avisosProtocolo(p) {
 
 function filaProtocolo(p) {
   const tr = document.createElement('tr');
+  const est = String(p.estado || '').trim();
   const estadoBadge = {
     'Enviado': '<span class="badge badge-enviado">📤 Enviado</span>',
-    'En Evaluación': '<span class="badge badge-evaluacion">📝 Evaluando</span>',
-    'Aprobado': '<span class="badge badge-aprobado">✅ Aprobado</span>',
-    'Devuelto': '<span class="badge badge-devuelto">↩️ Devuelto</span>'
-  }[p.estado] || esc(p.estado);
+    'En Evaluación': '<span class="badge badge-evaluacion">📝 Evaluando</span>'
+  }[est]
+    || (esAprobado(est) ? `<span class="badge badge-aprobado">✅ ${esc(est)}</span>` : '')
+    || (/^devuelto/i.test(est) ? `<span class="badge badge-devuelto">↩️ ${esc(est)}</span>` : '')
+    || esc(est);
   const nombre = esc(String(p.nombreArchivo || '').substring(0, 30));
   const url = String(p.urlArchivo || '');
 

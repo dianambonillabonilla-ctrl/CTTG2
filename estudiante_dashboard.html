@@ -570,7 +570,8 @@ async function actualizarBotonesFases(radicaciones) {
     const dF2   = await resF2.json();
     if (dF2.success) {
       fase2Aprobada = (dF2.protocolos || []).some(p =>
-        esDelGrupo(p.emailEstudiante) && lower(p.numero) === lower(vigente.numero) && p.estado === 'Aprobado'
+        // La hoja usa "Aprobado" y también "Aprobado Directo": ambos habilitan la Fase 3.
+        esDelGrupo(p.emailEstudiante) && lower(p.numero) === lower(vigente.numero) && /^aprobado/.test(lower(p.estado))
       );
     }
   } catch(e) {}
